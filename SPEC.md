@@ -1,327 +1,195 @@
-# Multi-Entity Event-Driven Financial Data Simulator Specification
+# Spec: Financial World Generator
 
-**Reference Benchmark:** [AccountingBench (Penrose)](https://accounting.penrose.com/)
+Status: DRAFT for review. Generalizes the single-scenario `TARGET_EXAMPLE.md`, the kind of output this system should produce. It is also expressed as `examples/saas_startup` (one instance of this system).
 
-## 1. Executive Summary & Core Philosophy
+## Assumptions (correct me before planning starts)
 
-Traditional synthetic financial datasets fail because they are generated **top-down from accounting records**: a script invents balanced journal entries first and then reverse-engineers clean rows in bank, credit card, and payment processor tables. That approach eliminates the real-world friction of money movement—asynchronous settlement lags, many-to-one payout batching, inconsistent vendor descriptors, and arbitrary human behavior.
+1. Greenfield: no implementation exists in this repo yet.
+2. Python 3.12. The core is **non-deterministic by design**: LLMs may be called inside the simulation loop, so noise and behavior can be steered by prompts attached on the dashboard rather than only by coded perturbations.
+3. For now the output is **JSON tables only**: AccountingBench-style `source_data` tables (bank, card, processor, payroll) emitted as JSON and streamed to the dashboard, which displays them in real time as they are generated.
+4. The world manifest is the single contract between "authoring" and "simulation": a human or an agent can write it, the simulator only reads it.
 
-This simulator reverses that paradigm by modeling a **bottom-up, multi-agent economic world** with zero accounting assumptions baked into the generation process:
+## Objective
 
-1. **Causal Grounding:** Every dollar movement is triggered by an underlying real-world event—an exchange of goods or services, a contract renewal, a payroll cycle, or a human persona's weekly work and personal activities.
-2. **Strict Entity Isolation ("Blind Entities"):** Each external participant and financial institution (Customers, Vendors, Employees, Stripe, Ramp, Rippling, Mercury Bank) operates as an isolated agent with its own local state and clock. When an entity acts, it **completely ignores** entities not directly involved in that step and writes exclusively to its own tables.
-3. **Narrative-Driven Human Arbitrariness:** Rather than generating uncorrelated random numbers for discretionary spending, a two-stage **Human Persona & Lifestyle Agent** first writes a weekly/monthly narrative diary of what executives and staff did in their corporate and personal lives, then translates those narrative beats into realistic clusters of transactions (including executives spending business funds on personal items).
+Create near-real financial scenarios and situations: many varied, realistic synthetic financial worlds. A world is generated top-down in *intent* but simulated bottom-up in *money movement*:
 
----
-
-## 2. System Architecture & Simulation Layers
-
-The simulator runs across a configurable multi-month timeline governed by a daily tick clock and three decoupled layers:
-
-```text
-+-----------------------------------------------------------------------------------+
-| LAYER 1: WORLD CLOCK & ASYNCHRONOUS CLEARINGHOUSE ENGINE                          |
-| - Steps simulation day-by-day (00:00 -> 23:59 UTC)                                |
-| - Enforces weekends, federal bank holidays, and T+1 / T+2 / T+3 ACH settlement    |
-| - Holds in-flight card authorizations, ACH pulls, and wires until maturity        |
-+-----------------------------------------+-----------------------------------------+
-                                          |
-                                          v
-+-----------------------------------------------------------------------------------+
-| LAYER 2: ECONOMIC COUNTERPARTY & HUMAN NARRATIVE AGENTS (Trigger Events)          |
-|                                                                                   |
-|  +------------------------+  +------------------------+  +---------------------+  |
-|  | Customer Cohort Agent  |  | Vendor/Supplier Agent  |  | Workforce & Human   |  |
-|  | - Self-serve SaaS      |  | - Cloud (Vercel/AWS)   |  | Persona Diary Agent |  |
-|  | - Enterprise contracts |  | - SaaS tools / Ads     |  | - Exec personal use |  |
-|  | - Refunds & disputes   |  | - Rent, Legal, Amazon  |  | - Travel & meals    |  |
-|  +-----------+------------+  +-----------+------------+  +----------+----------+  |
-+--------------|---------------------------|--------------------------|-------------+
-               | (Card Charges / Wires)    | (Card Swipes / ACH)      | (Swipes / Payroll / Wires)
-               v                           v                          v
-+-----------------------------------------------------------------------------------+
-| LAYER 3: FINANCIAL INSTITUTION AGENTS (Isolated State -> Write to `source_data`)  |
-|                                                                                   |
-|  +-----------------+   +-----------------+   +-----------------+   +-----------+  |
-|  | Stripe Agent    |   | Ramp Card Agent |   | Rippling Agent  |   | Mercury   |  |
-|  | -> stripe_*     |   | -> ramp_*       |   | -> rippling_*   |   | Bank      |  |
-|  | (T+2/wk payout) |   | (1-3d settle)   |   | (10th & 26th)   |   | -> merc_* |  |
-|  +--------+--------+   +--------+--------+   +--------+--------+   +-----+-----+  |
-|           |                     |                     |                  ^        |
-|           +---------------------+---------------------+------------------+        |
-|                         (Settled ACH / Wire Events via Clearinghouse)             |
-+-----------------------------------------------------------------------------------+
+```
+world generator -> entity + relationship generator -> story generator -> noise (at every level)
+        \_______________ authoring agents write ______________/
+                              |
+                        World Manifest ("dashboard": entities, relationships, stories, one-offs, prompts, time range)
+                              |
+                  compiler -> discrete-event engine -> per-institution renderers
+                              |                              |
+                   ground-truth event log          source_data tables (Penrose-like)
 ```
 
----
+How a run works: each relationship, story and prompt independently emits events within the time range, without seeing the rest of the world. All events go into one shared stream. Each institution (Mercury, Stripe, Ramp, Rippling) takes the events that involve it and writes them as rows in its own JSON tables, and cross-cutting behavior such as settlement delays and payout batching happens there. The dashboard is interactive: edit any prompt, rerun, and the data is recreated.
 
-## 3. Detailed Specification of Entity Agents & Tools
+Users: (a) eval authors who want a new world by prompt, (b) reviewers who inspect and edit the manifest in a dashboard before running, (c) accounting agents under test, which see only `source_data`.
 
-Every agent is restricted to its own toolset and local view of the world. No agent may query or mutate another entity's internal tables.
+The product is the **dashboard**. Code builds the skeleton (entity shells, relationship map, time range) and every entity, relationship, story and noise item carries an associated prompt. These prompts are where one-offs live (a late payment, a personal charge, a disputed invoice) and all of them are editable from the dashboard; data is generated from them.
 
-### 3.1 Layer 1: World Clock & Clearinghouse Engine (`sim_engine`)
-Acts as the physics engine for time and money movement between institutions.
-* **What It Knows:** Current simulation timestamp, business-day calendar, pending card authorizations, and in-flight ACH/wire transfers between external institutions and Mercury Bank.
-* **What It Ignores:** Customer identities, internal company operations, and platform-specific data.
-* **Tools:**
-  * `advance_day_tick(current_date: date) -> dict`: Advances the simulation clock by 1 day, firing scheduled calendar triggers (payroll dates, subscription renewals, statement cutoffs) and maturing in-flight clearinghouse transfers.
-  * `enqueue_clearinghouse_transfer(origin_entity: str, dest_bank_account: str, amount: Decimal, initiated_date: date, settlement_delay_days: int, raw_memo: str, metadata: dict) -> UUID`: Places an ACH credit/debit or wire transfer into the interbank queue to settle after `settlement_delay_days` business days.
-  * `deliver_matured_transfers(current_date: date) -> list[UUID]`: Delivers all transfers whose `effective_settlement_date <= current_date` to the target bank agent (`Mercury Bank Agent`).
+The first version generated from the main prompt is plain: it creates what was asked for and nothing more, with no one-offs added on its own. Reviewers then add and edit one-offs in the per-entity prompts and regenerate.
 
-### 3.2 Layer 2A: Customer Cohort Agent (`counterparty.customers`)
-Simulates hundreds of self-serve SaaS subscribers and a roster of enterprise B2B buyers.
-* **What It Knows:** Only its own customer profile—subscription tier ($25, $37, $39, $80, $139, or $270/month; or annual enterprise prepay contracts like `Contoso` at $85,363.20/year), renewal date, payment method (Stripe card vs. direct Mercury wire/ACH), and churn/refund probability ([AccountingBench](https://accounting.penrose.com/)).
-* **What It Ignores:** Startup bank balances, Stripe's payout batching, and other customers.
-* **Tools:**
-  * `sign_subscription_contract(customer_id: UUID, plan_type: str, billing_cycle: str, amount: Decimal, start_date: date, end_date: date, payment_channel: str) -> UUID`: Creates a service agreement for monthly or multi-month/annual SaaS access.
-  * `trigger_customer_billing_event(customer_id: UUID, contract_id: UUID, billing_date: date) -> dict`: Emits an invoice/charge request to the `Stripe Processor Agent` (for card customers) or initiates a wire/ACH via the `Clearinghouse` (for enterprise invoice customers).
-  * `request_customer_refund_or_dispute(customer_id: UUID, charge_id: UUID, request_date: date, amount: Decimal, reason: str) -> UUID`: Triggers a full or partial refund or chargeback event in Stripe days or weeks after the original payment.
+Success looks like: a reviewer types a one-paragraph prompt, reviews a generated manifest, runs the simulator, and gets institution tables with realistic friction (settlement lags, batched payouts, messy descriptors, personal commingling) plus an answer key that explains every cent.
 
-### 3.3 Layer 2B: Vendor & Supplier Agent (`counterparty.vendors`)
-Simulates external businesses providing cloud infrastructure, SaaS tools, advertising, office space, and professional services.
-* **What It Knows:** Its own service delivery schedule, pricing model (fixed monthly tier, usage-based compute metering, or annual prepaid contract), and how it bills the startup (charging a stored Ramp card, pulling an authorized ACH debit from Mercury, or sending a Net-30 invoice).
-* **What It Ignores:** Startup bank balances, other vendors, and internal company operations.
-* **Vendor Roster Categories:**
-  * **Cloud & Compute Providers:** `VERCEL INC - Monthly Pro Plan` ($20.00/mo), `AMAZON WEB SERVICES` (variable usage), `RUNPOD.IO` (GPU bursts) ([AccountingBench](https://accounting.penrose.com/)).
-  * **Marketing & Ad Networks:** `Facebook Ads` ($400.00 threshold billing), `LinkedIn` ($281.46 campaigns), `GOOGLE ADS` ([AccountingBench](https://accounting.penrose.com/)).
-  * **SaaS Tools:** `FIGMA`, `NOTION LABS`, `SLACK TECHNOLOGIES`, `LINEAR`, `GITHUB`, `GWORKSPACE`.
-  * **Facilities, Legal & Operations:** Commercial landlord (monthly wire/ACH rent `$7,000.00`), corporate counsel (quarterly retainer/Net-30 invoice), `Amazon` (`AMZN MKTP US` equipment/supplies) ([AccountingBench](https://accounting.penrose.com/)).
-* **Tools:**
-  * `deliver_vendor_service(vendor_id: UUID, service_period_start: date, service_period_end: date, amount: Decimal, description: str) -> UUID`: Logs the actual delivery of goods/services.
-  * `charge_startup_ramp_card(vendor_id: UUID, card_id: UUID, txn_date: date, amount: Decimal, merchant_descriptor: str) -> UUID`: Sends a card authorization request to the `Ramp Card Agent`.
-  * `initiate_vendor_ach_or_wire_request(vendor_id: UUID, bank_account_num: str, txn_date: date, amount: Decimal, ach_descriptor: str) -> UUID`: Submits a direct ACH debit or wire payment instruction to the `Clearinghouse`.
-  * `issue_net30_vendor_invoice(vendor_id: UUID, invoice_date: date, due_date: date, amount: Decimal, service_period: tuple[date, date]) -> UUID`: Delivers an invoice to be paid up to 30 days later.
+## Tech Stack
 
-### 3.4 Layer 2C: Workforce & Human Persona Diary Agent (`counterparty.humans`)
-Simulates both structured employment (salaried work periods) and unstructured, narrative-driven human life and corporate behavior.
-* **What It Knows:** Each human's role (e.g., CEO/Co-founder, CTO/Co-founder, VP of Sales, Senior Engineers, Office Manager), base salary, hire/termination dates, assigned Ramp card, bank access permissions, and personal lifestyle habits.
-* **What It Ignores:** Payment processor settlement logic and other financial institutions' internal tables.
-* **Tools (Two-Stage Narrative-to-Transaction Pipeline):**
-  * `generate_persona_period_diary(persona_id: UUID, period_start: date, period_end: date, company_context: dict) -> dict`: Generates a weekly or monthly narrative summary of what the human did across both corporate duties (client travel, conferences, team dinners, emergency hardware purchases) and personal life (family vacations, personal shopping, gym memberships, personal tax payments, accidental card mix-ups).
-  * `emit_diary_ramp_swipes(persona_id: UUID, diary_id: UUID, swipe_events: list[dict]) -> list[UUID]`: Translates narrative events into correlated `Ramp Card Agent` authorizations with realistic dates, city codes, merchant strings, tips, and tax amounts.
-  * `submit_ramp_employee_memo(persona_id: UUID, ramp_txn_id: UUID, memo_text: str, receipt_uploaded: bool) -> bool`: Simulates the human attaching (or neglecting to attach) a note to their Ramp swipe—ranging from clear business notes (*"Client dinner with Acme VP"*) to personal admissions (*"Accidentally used company card for personal Uber Eats, please deduct"*) or blank memos.
-  * `initiate_executive_bank_draw(persona_id: UUID, mercury_account: str, txn_date: date, amount: Decimal, counterparty_memo: str, is_personal_draw: bool) -> UUID`: Allows an executive with direct bank credentials to wire or ACH money out of `Mercury Checking X0666` for either off-cycle business needs or personal executive spending ([AccountingBench](https://accounting.penrose.com/)).
-  * `log_employee_pay_period(persona_id: UUID, pay_period_start: date, pay_period_end: date, salary_earned: Decimal, bonus: Decimal, reimbursements: Decimal) -> UUID`: Registers completed work for the `Rippling Payroll Agent` to process on the 10th and 26th ([AccountingBench](https://accounting.penrose.com/)).
+- Python 3.12, `pydantic` v2 (manifest + event models), `PyYAML`, `typer` (CLI), `anthropic` SDK (authoring agents and run-time noise/behavior)
+- JSON tables as the only output format; a streaming channel (e.g. server-sent events or websocket) pushes rows to the dashboard as they are generated
+- `pytest`, `hypothesis` (property tests), `ruff`, `mypy --strict`
+- Money is `decimal.Decimal` everywhere; never `float`. Dates are `datetime.date`; engine time is integer day index from `start_date`.
 
-### 3.5 Layer 3A: Stripe Processor Agent (`institution.stripe`)
-Operates as an isolated payment processor between customers and the startup's bank.
-* **What It Knows:** Customer invoices, card charges, refunds/disputes, Stripe processing fees (`2.9% + $0.30`), and its own unsettled balance.
-* **What It Ignores:** Mercury Bank balances, Ramp cards, and Rippling payroll.
-* **Tools:**
-  * `create_stripe_invoice_and_charge(customer_email: str, invoice_num: str, txn_date: date, gross_amount: Decimal, metadata: dict) -> UUID`: Writes an invoice and charge record into `source_data.stripe_invoices` and `source_data.stripe_charges` with its calculated processing fee ([AccountingBench](https://accounting.penrose.com/)).
-  * `record_stripe_refund(charge_id: UUID, refund_date: date, refund_amount: Decimal, is_negative_balance_pull: bool) -> UUID`: Writes a refund to `source_data.stripe_refunds`; if daily refunds exceed charges, initiates an ACH debit (`Stripe - Expense - STRIPE`, e.g., `-$35.39` or `-$282.70`) from Mercury Checking via the Clearinghouse ([AccountingBench](https://accounting.penrose.com/)).
-  * `execute_stripe_payout_batch(payout_date: date) -> UUID`: Sweeps accumulated net charges minus fees into a single payout record in `source_data.stripe_payouts` and enqueues an ACH credit (`Deposit - STRIPE`) in the Clearinghouse that settles in `Mercury Checking X0666` 1–2 business days later ([AccountingBench](https://accounting.penrose.com/)).
+## Commands
 
-### 3.6 Layer 3B: Ramp Corporate Card Agent (`institution.ramp`)
-Operates as an isolated corporate charge card platform.
-* **What It Knows:** Cardholder authorizations, settlement delays (1–3 days after swipe), merchant category hints, employee memos, and monthly statement cycles.
-* **What It Ignores:** What sits in Mercury, Stripe, or Rippling.
-* **Tools:**
-  * `authorize_and_settle_card_txn(card_id: UUID, swipe_date: date, settle_date: date, merchant_name: str, amount: Decimal, ramp_category_hint: str, employee_memo: str) -> UUID`: Writes settled card transactions to `source_data.ramp_card_transactions` ([AccountingBench](https://accounting.penrose.com/)). Swipes near month-end (e.g., March 30) that settle in early April create natural cutoff differences.
-  * `generate_ramp_monthly_statement(statement_month: str, cutoff_date: date) -> UUID`: Compiles all settled transactions up to `cutoff_date` into `source_data.ramp_statements` and schedules an autopay ACH pull from `Mercury Checking X0666` via the Clearinghouse ([AccountingBench](https://accounting.penrose.com/)).
-
-### 3.7 Layer 3C: Rippling Payroll Agent (`institution.rippling`)
-Operates as an isolated payroll and HR tax engine.
-* **What It Knows:** Employee salaries, tax withholding rates, benefit deductions, and bi-monthly pay dates (e.g., the 10th and 26th of each month) ([AccountingBench](https://accounting.penrose.com/)).
-* **What It Ignores:** All non-payroll company activity.
-* **Tools:**
-  * `run_bimonthly_payroll_export(payroll_date: date, je_num: int) -> list[UUID]`: Aggregates active employees' gross pay, employer taxes, benefits, and net pay splits, writing multi-line rows into `source_data.rippling_journal_entries` (e.g., `JE #18` on `2021-03-10` and `JE #19` on `2021-03-26`) ([AccountingBench](https://accounting.penrose.com/)).
-  * `initiate_payroll_ach_debits(payroll_date: date, net_pay_total: Decimal, tax_impound_total: Decimal) -> list[UUID]`: Enqueues the corresponding cash debits against `Mercury Checking X0666` via the Clearinghouse.
-
-### 3.8 Layer 3D: Mercury Bank & Treasury Agent (`institution.mercury`)
-Operates as the commercial bank housing `Mercury Checking X0666`, `Mercury Checking X3354`, and `Mercury Treasury` ([AccountingBench](https://accounting.penrose.com/)).
-* **What It Knows:** Only settled cash movements delivered by the Clearinghouse, internal transfers between its three accounts, monthly treasury yield rates, and bank service fees.
-* **What It Ignores:** Which individual customer invoices make up a `Deposit - STRIPE` batch, or unposted checks/card swipes that haven't settled.
-* **Tools:**
-  * `post_mercury_settled_transaction(account_code: str, settled_date: date, description: str, amount: Decimal, txn_type: str) -> UUID`: Appends a settled line to `source_data.mercury_transactions` (e.g., `Deposit - STRIPE`, `Stripe - Expense - STRIPE`, `ACH Debit - RAMP`, `ACH Debit - RIPPLING`) ([AccountingBench](https://accounting.penrose.com/)).
-  * `accrue_and_post_bank_interest_and_fees(month_end_date: date) -> list[UUID]`: Posts month-end interest earned (e.g., `Interest Accrual` `$0.82` on checking or larger yields in `source_data.mercury_treasury_records`) and monthly service fees ([AccountingBench](https://accounting.penrose.com/)).
-  * `publish_mercury_monthly_statements(month_end_date: date) -> list[UUID]`: Generates official statement headers and line items in `source_data.mercury_statement_line_items` for `X0666`, `X3354`, and `Mercury Treasury` ([AccountingBench](https://accounting.penrose.com/)).
-
----
-
-## 4. Deep Dive: The Two-Stage Human Narrative & Lifestyle Engine
-
-To ensure human-triggered transactions are realistic rather than uniform noise, the **Workforce & Human Persona Diary Agent** simulates a fixed cast of company insiders each week:
-
-| Persona | Role & Access | Typical Corporate Activity | Typical Personal / Commingled Activity |
-| :--- | :--- | :--- | :--- |
-| **Alex Rivera** | Co-Founder & CEO *(Full Ramp + Mercury Wire/ACH access)* | Investor pitches in SF/NYC, board dinners, SaaS executive tools, conference flights. | Uses corporate Ramp card for personal Equinox gym, Peloton, weekend family hotels, personal groceries (`WHOLE FOODS`), and wires personal estimated taxes or car lease payments from Mercury. |
-| **Sam Chen** | Co-Founder & CTO *(Ramp Card + AWS/Cloud admin)* | Scales AWS/Vercel infrastructure, buys test GPUs (`RUNPOD.IO`), replaces MacBook Pros for new hires. | Orders late-night DoorDash during outages; occasionally buys personal home-automation gear on Amazon (`AMZN MKTP US`) with corporate card and notes *"Personal - will reimburse"*. |
-| **Jordan Taylor** | VP of Sales *(Ramp Card)* | Takes enterprise prospects to steakhouses, books last-minute flights/Ubers, buys client renewal gifts. | Extends a 3-day sales trip in Miami over the weekend and charges personal beach club dining to Ramp without a receipt. |
-| **Casey Patel** | Senior Engineer *(Virtual Ramp Card)* | Renews GitHub/Linear seats, buys monitor cables, orders team lunch during sprint planning. | Clean card usage; occasionally forgets to upload a receipt or writes terse memos (`"cables"`). |
-| **Morgan Lee** | Ops & Office Manager *(Ramp Card + Vendor Billing)* | Pays office rent, orders Costco snacks, books Friday team happy hours, manages annual insurance prepayments. | Accidentally uses Ramp card stored in personal Uber Eats profile on a Sunday evening and immediately adds a Ramp memo flagging the mistake. |
-
-### Example Narrative-to-Transaction Trace (Week 2 of March 2021)
-1. **Stage 1 (`generate_persona_period_diary`):**
-   > *"CEO Alex Rivera flew to New York (March 11–14) to close the Contoso enterprise expansion. Hosted Contoso executives at Mastro's Steakhouse on March 12. Stayed two extra personal nights at the hotel with spouse (March 13–14), bought personal AirPods Max at the Fifth Ave Apple Store on Saturday March 13 using the company Ramp card, and initiated an ACH payment from Mercury Checking X0666 on March 15 to cover a personal vehicle lease."*
-2. **Stage 2 (Triggered Entity Events):**
-   * `Ramp Card Agent` receives 4 swipes on Alex's card:
-     * `2021-03-11`: `DELTA AIR LINES` — `$642.20` (Memo: *"NYC flight for Contoso meeting"*)
-     * `2021-03-12`: `MASTRO'S STEAKHOUSE NYC` — `$784.50` (Memo: *"Dinner w/ Contoso VP Eng & CFO"*)
-     * `2021-03-13`: `APPLE STORE #R001 NYC` — `$598.81` (Memo: *""* — left blank, Saturday timestamp, consumer retail)
-     * `2021-03-14`: `THE STANDARD HIGH LINE` — `$1,800.00` (Memo: *"4 nights NYC - 2 nights Contoso biz, 2 nights personal weekend"*)
-   * `Clearinghouse` -> `Mercury Bank Agent` (`X0666`) receives 1 ACH Debit:
-     * `2021-03-16`: `ACH Debit - PORSCHE FINANCIAL` — `($1,150.00)`
-
----
-
-## 5. PostgreSQL `source_data` Schema Specification
-
-Each financial institution agent writes strictly to its own tables inside the `source_data` schema ([AccountingBench](https://accounting.penrose.com/)).
-
-```sql
-CREATE SCHEMA IF NOT EXISTS source_data;
-
--- 1. Mercury Bank Transactions & Statements (Written only by Mercury Bank Agent)
-CREATE TABLE source_data.mercury_transactions (
-    id UUID PRIMARY KEY,
-    account_name TEXT NOT NULL, -- 'Mercury Checking X0666', 'Mercury Checking X3354', 'Mercury Treasury'
-    transaction_date DATE NOT NULL,
-    posted_date DATE NOT NULL,
-    description TEXT NOT NULL,
-    amount NUMERIC(14, 2) NOT NULL, -- Positive for deposits, negative for withdrawals
-    transaction_type TEXT NOT NULL, -- 'ACH Credit', 'ACH Debit', 'Wire', 'Internal Transfer', 'Interest', 'Fee'
-    counterparty_name TEXT
-);
-
-CREATE TABLE source_data.mercury_statement_line_items (
-    id UUID PRIMARY KEY,
-    statement_month VARCHAR(7) NOT NULL, -- e.g. '2021-03'
-    account_name TEXT NOT NULL,
-    date DATE NOT NULL,
-    description TEXT NOT NULL,
-    amount NUMERIC(14, 2) NOT NULL,
-    running_balance NUMERIC(14, 2) NOT NULL
-);
-
-CREATE TABLE source_data.mercury_treasury_records (
-    id UUID PRIMARY KEY,
-    statement_month VARCHAR(7) NOT NULL,
-    beginning_balance NUMERIC(14, 2) NOT NULL,
-    deposits NUMERIC(14, 2) NOT NULL,
-    withdrawals NUMERIC(14, 2) NOT NULL,
-    interest_earned NUMERIC(14, 2) NOT NULL,
-    ending_balance NUMERIC(14, 2) NOT NULL
-);
-
--- 2. Ramp Corporate Credit Card (Written only by Ramp Card Agent)
-CREATE TABLE source_data.ramp_card_transactions (
-    id UUID PRIMARY KEY,
-    cardholder_name TEXT NOT NULL,
-    cardholder_role TEXT NOT NULL,
-    swipe_date DATE NOT NULL,
-    transaction_date DATE NOT NULL, -- Settlement date on Ramp
-    merchant_name TEXT NOT NULL,
-    amount NUMERIC(14, 2) NOT NULL, -- Positive for spend, negative for merchant refunds
-    ramp_category TEXT,             -- Noisy platform category hint
-    memo TEXT,                      -- Human-entered memo (may be NULL, helpful, or personal admission)
-    statement_id UUID
-);
-
-CREATE TABLE source_data.ramp_statements (
-    id UUID PRIMARY KEY,
-    statement_month VARCHAR(7) NOT NULL,
-    period_start DATE NOT NULL,
-    period_end DATE NOT NULL,
-    opening_balance NUMERIC(14, 2) NOT NULL,
-    new_charges NUMERIC(14, 2) NOT NULL,
-    payments_and_credits NUMERIC(14, 2) NOT NULL,
-    ending_balance NUMERIC(14, 2) NOT NULL,
-    autopay_date DATE
-);
-
--- 3. Stripe Payment Processor (Written only by Stripe Processor Agent)
-CREATE TABLE source_data.stripe_invoices (
-    id UUID PRIMARY KEY,
-    invoice_number TEXT NOT NULL,
-    customer_email TEXT NOT NULL,
-    customer_name TEXT,
-    invoice_date DATE NOT NULL,
-    service_period_start DATE NOT NULL,
-    service_period_end DATE NOT NULL,
-    amount_due NUMERIC(14, 2) NOT NULL,
-    status TEXT NOT NULL -- 'paid', 'open', 'void'
-);
-
-CREATE TABLE source_data.stripe_charges (
-    id UUID PRIMARY KEY,
-    invoice_id UUID REFERENCES source_data.stripe_invoices(id),
-    customer_email TEXT NOT NULL,
-    charge_date DATE NOT NULL,
-    amount NUMERIC(14, 2) NOT NULL,
-    fee_amount NUMERIC(14, 2) NOT NULL,
-    net_amount NUMERIC(14, 2) NOT NULL,
-    payout_id UUID -- Links to stripe_payouts once swept into a batch
-);
-
-CREATE TABLE source_data.stripe_refunds (
-    id UUID PRIMARY KEY,
-    charge_id UUID REFERENCES source_data.stripe_charges(id),
-    refund_date DATE NOT NULL,
-    amount NUMERIC(14, 2) NOT NULL,
-    reason TEXT,
-    payout_id UUID
-);
-
-CREATE TABLE source_data.stripe_payouts (
-    id UUID PRIMARY KEY,
-    payout_date DATE NOT NULL,         -- Date initiated by Stripe
-    arrival_date DATE NOT NULL,        -- Date settled in Mercury Checking X0666
-    gross_charges NUMERIC(14, 2) NOT NULL,
-    fees_deducted NUMERIC(14, 2) NOT NULL,
-    refunds_deducted NUMERIC(14, 2) NOT NULL,
-    net_payout_amount NUMERIC(14, 2) NOT NULL, -- Positive for deposit, negative for expense pull
-    status TEXT NOT NULL               -- 'paid', 'in_transit'
-);
-
--- 4. Rippling Payroll (Written only by Rippling Payroll Agent)
-CREATE TABLE source_data.rippling_journal_entries (
-    id UUID PRIMARY KEY,
-    entry_date DATE NOT NULL,
-    type TEXT NOT NULL,        -- 'Payroll Journal Entry'
-    num INTEGER NOT NULL,      -- e.g., 18, 19
-    description TEXT NOT NULL,
-    account TEXT NOT NULL,     -- Rippling's local export account label
-    debit NUMERIC(14, 2),
-    credit NUMERIC(14, 2)
-);
+```
+Install:   uv sync
+Test:      uv run pytest -q --cov=worldgen --cov-fail-under=90
+Lint:      uv run ruff check . && uv run ruff format --check .
+Types:     uv run mypy --strict worldgen
+Author:    uv run worldgen author --prompt "B2B SaaS, 18 months, 5 staff" --out worlds/demo/manifest.yaml
+Validate:  uv run worldgen validate worlds/demo/manifest.yaml
+Simulate:  uv run worldgen simulate worlds/demo/manifest.yaml --out worlds/demo/out     # writes <institution>/<table>.json
+Verify:    uv run worldgen verify worlds/demo/out          # ledger invariants + answer-key reconciliation
+Dashboard: uv run worldgen dashboard worlds/demo/manifest.yaml   # edit prompts, run/rerun the simulation, live JSON table view
 ```
 
----
+## Project Structure
 
-## 6. How Real-World Friction Emerges Naturally from Isolated Entities
+Convention: one file per agent, tool, template, story op, perturbation, renderer, booking rule and validator.
 
-Because each entity runs independently on its own schedule, real-world discrepancies appear across tables without hardcoding any special edge-case rules:
+```
+worldgen/
+  manifest/        -> pydantic models: World, Entity, Relationship, Story, Noise, TimeRange
+  authoring/
+    agents/        -> world_agent.py, entity_agent.py, relationship_agent.py, story_agent.py, noise_agent.py
+    tools/         -> one file per tool the agents may call
+    templates/     -> prompt templates (one per agent)
+  compiler/        -> manifest -> routine schedule (resolves refs, expands recurrences)
+  engine/
+    clock.py       -> day tick, business-day calendar, holidays
+    agents/        -> agent state, wake-up triggers, action validation, one file per trigger
+    revisions.py   -> prompt revision history
+    clearinghouse.py -> in-flight ACH/wire/card queue with settlement delays
+    ops/           -> one file per story operation (invoice, refund, payroll_run, card_swipe, ...)
+  perturbations/   -> one file per noise type (descriptor_variation, memo_blank, duplicate, late_post, ...)
+  institutions/    -> one renderer per institution: mercury.py, stripe.py, ramp.py, rippling.py
+  groundtruth/     -> event log schema + answer-key writer
+  booking/         -> one file per booking rule (derived books, post-v1 policy variants)
+  validators/      -> one file per invariant (conservation, isolation, schema)
+  sinks/           -> json_files.py, live_stream.py
+  cli.py
+examples/saas_startup/   -> TARGET_EXAMPLE expressed as a manifest
+tests/                    -> mirrors worldgen/ layout
+docs/                     -> manifest reference, adding-an-institution guide
+```
 
-| Phenomenon | Causal Chain Across Independent Entities |
-| :--- | :--- |
-| **1. In-Transit Month-End Payouts** | Customers pay invoices on March 29–31 (`Stripe Agent`) -> Stripe batches a payout on March 30 (`payout_date = 2021-03-30`, `arrival_date = 2021-04-01`) -> `Clearinghouse` holds the ACH until April 1 -> `Mercury Bank` March statement excludes it ([AccountingBench](https://accounting.penrose.com/)). |
-| **2. Many-to-One Payout Batching** | Dozens of individual customer charges, processing fees, and refunds inside `source_data.stripe_*` are swept into a single net ACH transfer that appears on `source_data.mercury_statement_line_items` simply as `Deposit - STRIPE` ([AccountingBench](https://accounting.penrose.com/)). |
-| **3. Enterprise Prepayments vs. Service Delivery** | Enterprise customer `Contoso` signs an annual contract (`2021-02-01` to `2021-11-30`) and wires cash upfront, creating a single cash event in Mercury for 10–12 months of ongoing service delivery ([AccountingBench](https://accounting.penrose.com/)). |
-| **4. Executive & Employee Personal Commingling** | `Human Persona Agent` generates a weekend diary for an executive -> swipes Ramp at `APPLE STORE` and `EQUINOX`, and wires a personal car lease from `Mercury Checking X0666` alongside normal weekday business travel. |
-| **5. Ramp Swipe-to-Settlement Cutoff Lag** | Employee swipes a Ramp card on March 30 (`swipe_date = 2021-03-30`), but `Ramp Agent` settles the charge on April 1 (`transaction_date = 2021-04-01`), pushing it onto the next month's Ramp statement. |
+## Core Concepts
 
----
+| Concept | Definition |
+|---|---|
+| **Entity** | Isolated actor with its own state and clock: customer, vendor, person, institution, (later) tax jurisdiction. Authoring generates entities as mostly empty shells (id, kind, a few fields) that carry a `prompt` by default; the prompt, not coded fields, is what drives the data later generated for that entity. Writes only to its own tables. |
+| **Relationship** | An edge between entities (customer-of, employed-by, banks-with, ...). Carries a `prompt` (e.g. "annual prepay, disputes invoices") and optional terms: amount, schedule, payment channel. This is where recurring obligations such as subscriptions, prepays and rent live. Terms may be fixed or left to the prompt, so amounts and timing can be non-deterministic. The set of relationships is the map of the world, and the main structure the code owns. |
+| **Story** | Time-ordered causal chain of ops (e.g. "CEO NYC trip closes Contoso expansion") that triggers money movement through relationships and channels. |
+| **Noise / one-off** | Perturbation attached at any level (world, entity, relationship, story, single op): late posting, descriptor variants, blank memos, duplicates, refunds, personal commingling. Either a coded perturbation or a free-text prompt added on the dashboard and applied by an LLM at run time. |
+| **Op** | Atomic engine action emitting zero or more events, e.g. `card_swipe`, `stripe_charge`, `payout_batch`, `ach_pull`. |
+| **Event** | Immutable ground-truth record: `id, day, op, source_entity, dest_entity, amount, cause` (`cause` is a short plain-text summary of why it happened, e.g. "Contoso annual prepay due under r_contoso"). Every rendered row traces back to events. |
 
-## 7. Execution Workflow & Configuration Parameters
+## Simulation Model
 
-### 7.1 Step-by-Step Generation Pipeline
-1. **Initialize World & Entities (`init_simulation.py`):**
-   * Instantiate the PostgreSQL `source_data` schema and internal clearinghouse queue.
-   * Seed the starting equity wire (`$1,500,000` into `Mercury Checking X0666`), initial employee roster (5 core personas + scaling hires), vendor contracts, and initial customer cohort.
-2. **Run Daily Simulation Loop (`run_world_clock.py`):**
-   * At the start of each simulated week, invoke the **Human Persona Diary Agent** (`generate_persona_period_diary`) for each active staff member and schedule their narrative-driven card swipes, memos, and executive bank draws across the days of that week.
-   * For each day `t`:
-     1. Run `Customer Cohort Agent` renewals, signups, and refunds for day `t`.
-     2. Run `Vendor Agent` service deliveries, card charges, and ACH pulls for day `t`.
-     3. Run `Stripe Agent` invoice/charge captures and scheduled payout batches.
-     4. Run `Ramp Agent` card authorizations and T+1/T+2 settlements.
-     5. If `t` is the 10th or 26th, run `Rippling Agent` bi-monthly payroll export and ACH pulls.
-     6. Run `Clearinghouse` to deliver matured ACH/wire transfers to `Mercury Bank Agent`.
-     7. If `t` is month-end, run `Mercury Bank Agent` interest/fees and statement generation, plus `Ramp Agent` monthly statement closing.
+Decisions are made while the clock runs, not planned up front.
 
-### 7.2 Tunable Simulator Knobs (`config.yaml`)
-* `customer_growth_rate`: Monthly net new self-serve and enterprise SaaS signups.
-* `executive_commingling_frequency`: Probability per week that a founder uses a corporate card or bank account for a personal expense (`0.0` to `1.0`).
-* `employee_memo_completeness`: Distribution of detailed vs. vague vs. blank Ramp memos (`e.g., 60% detailed, 25% terse, 15% blank`).
-* `clearinghouse_ach_delay_days`: Min/max business days for ACH settlement (`1` to `3` days).
+- **Agents:** every entity runs as an agent. It holds its prompt and its own state: balances, open obligations, recent events and a short rolling memory summary. It sees only its own information, never the rest of the world.
+- **Wake-up triggers:** an agent is consulted by the LLM only when triggered, to keep calls sparse. Triggers are an incoming event (an invoice arrives, a payment falls due), a timer the agent set for itself, a low-probability random drift tick (mostly for people), and a balance crossing a threshold.
+- **Routine behavior:** recurring obligations run on coded rules by default. Each routine event also has a small, configurable chance of being handed to the LLM instead, which may then deviate from the routine (skip, delay, duplicate, dispute, cancel, change).
+- **Actions:** the LLM chooses from a fixed menu of ops with arguments. The engine validates every action (the op exists, funds are available, money is conserved) and executes it. The LLM never writes rows. A catalog of realistic merchants and price ranges keeps invented activity plausible.
+- **Reacting to its own finances:** institutions report balances back to the account's owner. Low cash lets an agent move money between its own accounts, delay or cut spending, chase receivables, or raise cash. A payment attempted without funds surfaces as a rejected payment or fee. Customers react the same way (pay late, short-pay, cancel). These feedback loops are intended, and each decision is logged with its `cause`.
+- **Parallelism:** agents cannot see each other, so all agents active on a simulated day are consulted in parallel. The day closes when all have answered, and the events they produced become visible to others from the next day. Simulated time runs faster than wall-clock time.
+- **Quirks and prompt revisions:** after a run an agent may propose a quirk, which is appended to its prompt as a new revision, visible and editable on the dashboard. Each revision records its text, its author (a user or an agent), the run and time it came from, and can be reverted. Later runs start from the revised prompt, so worlds can grow more eccentric over repeated runs.
+- **Logging:** runs are not reproducible, so every LLM prompt and response is recorded in the ground-truth log, along with the prompt revision it was made under.
+
+### Dashboard tracking
+
+- **Calendar:** each simulated day shows its events, LLM decisions (with `cause`), quirks added or triggered, and the rows that landed in each institution's table. Opening a decision shows the prompt and response.
+- **Zoom levels and filters:** a month grid shaded by activity, a day view with the full list, filters by entity or institution, and a "deviations only" filter showing days where an LLM changed something.
+- **Prompt history:** every prompt has a revision list. Decisions link to the revision they were made under, so a deviation can be traced to a user edit or an agent-added quirk.
+
+## Manifest Shape (excerpt)
+
+```yaml
+world: {name: demo, start: 2021-01-01, end: 2022-06-30, currency: USD}   # seed: optional, best-effort
+entities:
+  - {id: cust_contoso, kind: customer, prompt: "enterprise buyer, slow approvals, pays by wire"}
+  - {id: inst_mercury, kind: institution, institution: mercury}
+relationships:
+  - id: r_contoso
+    parties: [cust_contoso, co_self]
+    kind: customer_of
+    prompt: "annual prepay, expands mid-term after the NYC trip"
+    terms: {type: prepaid_annual, amount: "85363.20", start: 2021-02-01, end: 2021-11-30}   # optional
+    channel: wire
+stories:
+  - id: s_nyc_trip
+    ops:
+      - {op: card_swipe, day: 2021-03-11, actor: p_ceo, merchant: DELTA AIR LINES, amount: "642.20"}
+noise:
+  - {scope: {story: s_nyc_trip}, type: memo_blank, p: 0.3}
+  - {scope: {entity: cust_contoso}, prompt: "pays late and short-pays once, then sends a corrective wire"}
+```
+
+## Code Style
+
+```python
+# worldgen/perturbations/memo_blank.py
+from decimal import Decimal
+from worldgen.perturbations.base import Perturbation, Rng
+from worldgen.groundtruth.events import RenderedRow
+
+
+class MemoBlank(Perturbation):
+    """Drop the human-entered memo on a card row with probability p."""
+
+    type = "memo_blank"
+
+    def apply(self, row: RenderedRow, rng: Rng) -> RenderedRow:
+        if rng.random() < self.p:
+            return row.model_copy(update={"memo": None})
+        return row
+```
+
+Conventions: `snake_case` files named for the single thing they hold; one public class per file; docstring is one line; randomness through the injected `Rng`, and LLM calls through an injected `Llm` client, never imported directly, so tests can substitute fakes; no module-level state.
+
+## Testing Strategy
+
+- **Unit** (`tests/<mirror path>`): every op, perturbation, renderer, validator. LLM and `Rng` faked so tests stay stable even though the core is not deterministic.
+- **Property** (`hypothesis`): conservation (sum of events per account = rendered balance), isolation (an institution renderer never imports another's tables), settlement (no row posted before `initiated + min_delay`, none on weekends/holidays unless the channel allows).
+- **Invariants over goldens**: no checksum goldens. `examples/saas_startup` is run and checked for the TARGET_EXAMPLE phenomena and the validators, not for exact rows.
+- **LLM calls** (authoring and run time): mocked with recorded fixtures; tests assert manifests validate, refs resolve and invariants hold, never exact prose. One opt-in live smoke test behind `WORLDGEN_LIVE=1`.
+- **Coverage**: >= 90% lines on `worldgen/`, 100% on `validators/` and `engine/clearinghouse.py`.
+
+## Boundaries
+
+- **Always:** use `Decimal` for money; route randomness through `Rng` and LLM calls through `Llm`; log every LLM decision to the ground-truth log; validate every agent action against the op menu and available funds; run tests + ruff + mypy before commit; add a validator when adding an invariant; keep one-thing-per-file layout; update `docs/` when the manifest schema changes.
+- **Ask first:** adding runtime dependencies; changing the manifest schema in a breaking way (bump `schema_version`); changing output table schemas; choosing an accounting policy for derived books; any real network call beyond the Anthropic API.
+- **Never:** let an LLM write rendered rows without a matching ground-truth event (money must still be conserved); let one institution renderer read another's tables; use `float` for amounts; hardcode special-case friction (it must emerge from op delays and clearinghouse rules); expose the ground-truth log to the agent under test; commit API keys or generated worlds containing real PII.
+
+## Success Criteria
+
+1. `worldgen validate` rejects manifests with dangling refs, ops outside the time range, or unknown op/noise types, each with a pointing error message.
+2. `examples/saas_startup` reproduces every phenomenon in TARGET_EXAMPLE section 6 (in-transit month-end Stripe payout, many-to-one payout batching, enterprise prepay vs delivery, exec commingling, Ramp swipe-to-settle cutoff lag), asserted by tests that query the output tables.
+3. Variation without breakage: two runs of the same manifest may differ, but every run passes conservation and answer-key checks (criteria 4 and 5).
+4. Conservation: for every institution account, opening balance + sum(rendered rows) = closing balance; sum of cash events across the world = 0 (outside the world boundary account).
+5. Answer key: 100% of rendered rows link to at least one ground-truth event; `worldgen verify` reports 0 orphans.
+6. Coded noise is applied per scope as declared, measured: with `p=0.3` over >= 500 rows the observed rate is within 5 points of 0.3. Prompt noise is checked only by the invariants and by logging which rows it touched.
+7. `worldgen author` turns a one-paragraph prompt into a manifest that passes `validate` on >= 90% of 20 fixture prompts (mocked-LLM replay), producing an interactive dashboard that lists entities, relationships, stories, noise, prompts and time range. Editing any prompt and pressing run regenerates the JSON tables, shown live as they are produced.
+8. A new institution can be added by creating one renderer file and one test file, with no edits to engine core (demonstrated by a toy `plaid` renderer in the docs guide).
+9. Rows start streaming to the dashboard as soon as a run starts, and a run stays within a per-run LLM budget (limits set in Open Questions).
+10. Every agent action is validated: an action outside the op menu or beyond available funds is rejected and logged, never rendered.
+
+## Open Questions
+
+1. **LLM provider and budget:** is Claude via the Anthropic SDK the only supported provider? With LLMs inside the loop, what is the per-run cost and latency budget?
+2. **LLM or coded:** which entities are LLM agents (e.g. the few people and key customers) and which follow coded rules with an escalation chance (e.g. bulk small customers)?
+3. **Escalation rate:** set globally only, or also overridable per entity on the dashboard?
+4. **Run history:** keep every run's calendar for side-by-side comparison, or only the latest run?
