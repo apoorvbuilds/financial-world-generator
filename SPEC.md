@@ -22,7 +22,7 @@ root narrator -> child narrators (recursively) -> actors          (authoring: th
     |
 World Manifest (node tree, entities, accounts, relationships, stories, noise, prompts, time range)
     |
-compiler -> day loop: chapters (reports up, briefs down) + one turn per actor per day
+compiler -> day loop: narrator reviews (reports up, briefs down) + one turn per actor per day
                 |
      clearinghouse -> per-institution renderers
                 |                      |
@@ -72,7 +72,7 @@ worldgen/
     nodes.py       -> the node tree: parent, children, role, and the entity each node stands for
     spawn.py       -> adds and retires nodes, on day 0 and during a run
     briefs.py      -> builds a node's brief for a turn: prompt, chapter brief, noise in scope, today's items
-    chapters.py    -> chapter boundaries: reports up the tree, then briefs down, one level at a time
+    reviews.py     -> a narrator's review: reports up its subtree, then briefs down, one level at a time; review dates and escalations
   agents/
     loop.py        -> AgentLoop: one turn of one node, a tool-use loop the engine owns
     roles/         -> narrator.py, actor.py, staff.py: the tool set for each role
@@ -82,7 +82,7 @@ worldgen/
   engine/
     clock.py       -> day tick, business-day calendar, holidays
     rng.py         -> Rng: the injected source of randomness for coded mechanics
-    day.py         -> one simulated day: chapter step, parallel turns, day close
+    day.py         -> one simulated day: the reviews due that day, parallel turns, day close
     obligations.py -> open obligations per handler; asks again, then logs, any left unanswered
     inbox.py       -> messages between nodes, delivered the next day
     revisions.py   -> prompt revision history
@@ -111,7 +111,7 @@ docs/                     -> manifest reference, adding-an-institution guide
 | **Access** | A grant that lets an actor use an account in named ways: cardholder, wire and ACH signer, payroll admin. An actor uses its own entity's accounts, and other entities' accounts only through access (the ops manager pays rent from the company's checking account; the CEO swipes a company Ramp card). |
 | **Relationship** | An edge between entities (customer-of, employed-by, leases-from, ...). Carries a `prompt` (e.g. "annual prepay, disputes invoices"), optional terms (amount, schedule, payment channel) and a handler for each party: the actor that bills or pays under it. This is where recurring obligations such as subscriptions, prepays and rent live. The compiler turns terms into dated obligations, and the handler of each one decides what actually happens. Terms may be fixed or left to the prompt, so amounts and timing can be non-deterministic. A relationship is written by the lowest narrator whose subtree holds a node for every party that is not an institution. The set of relationships is the map of the world, and the main structure the code owns. |
 | **Obligation** | A dated item a handler owes or bills, under a relationship's terms (rent due on the 1st, a renewal on the 14th, payroll on the 10th) or under an invoice it received. It appears in the handler's brief on its due day, and the handler's answer produces the events (see Simulation Model). |
-| **Chapter** | The narrators' unit of time, with its length set in world config (default one calendar month). At each chapter boundary, reports go up the tree and new briefs come down. |
+| **Chapter** | One narrator's planning period, from one of its reviews to the next. At a review, reports come up from the narrator's subtree and new briefs go down it. Each narrator sets the date of its own next review, so chapters vary in length between narrators and over time: the root may plan quarterly while the sales narrator checks in weekly during a big deal. A child's escalation brings its parent's review forward. |
 | **Brief** | What a narrator tells a child for a chapter: plans, intent and context for its part of the story ("you fly to New York March 11-14 to close the Contoso expansion"). A node's prompt is who it is; its brief is what is going on. |
 | **Message** | Text one node sends another: an invoice notice, a dunning email, a dispute, "can we split this payment". Delivered to the recipient's inbox the next day. An actor can message the handlers on the other side of the relationships it handles, and anyone who has messaged it. |
 | **Story** | A time-ordered causal chain of steps (e.g. "CEO NYC trip closes Contoso expansion"), written by a narrator or a reviewer. Each step names an actor in the writer's subtree, a day and an intent, optionally with a merchant and amount, and appears in that actor's brief on its day. The actor decides the events. |
@@ -123,17 +123,18 @@ docs/                     -> manifest reference, adding-an-institution guide
 
 Decisions are made while the clock runs, not planned up front.
 
-- **Day 0 (authoring):** the root narrator reads the main prompt and spawns its children, which spawn theirs, down to the actors. Narrators create entities, accounts, access grants, relationships, merchant descriptors and stories with tree tools, and write each child's first brief. The result is saved as the manifest, which a reviewer can edit before the run.
+- **Day 0 (authoring):** the root narrator reads the main prompt and spawns its children, which spawn theirs, down to the actors. Narrators create entities, accounts, access grants, relationships, merchant descriptors and stories with tree tools, write each child's first brief, and set their own first review. The result is saved as the manifest, which a reviewer can edit before the run.
 - **A growing tree:** during a run, narrators add and retire nodes as the story needs (a hire, a new customer, a dropped vendor), with the entities, accounts and access that come with them. Each change is logged with the narrator that made it.
-- **Chapters:** on the last day of a chapter, each actor's brief asks for a report, which it gives with `report_up`. Narrators then read their children's reports and report to their own parent, one level at a time up to the root. From the root down, each narrator writes the next chapter's brief for each child and adds or retires children. Narrators at the same level work in parallel. A narrator sees its own prompt and brief, its children's prompts and reports, and its own past chapters.
+- **Reviews:** a review runs at the start of its day, before that day's turns, and covers the reviewing narrator's subtree. Each actor in the subtree takes a report turn and reports what happened since its last report with `report_up`. The narrators below the reviewing narrator then read their children's reports and report to their own parent, one level at a time from the deepest. The reviewing narrator reads its children's reports, writes each child's next brief, adds or retires children, and sets its next review with `schedule_review` (a date and a reason, such as "in two weeks" or "the day after Contoso's procurement decision"). Briefs then go down the subtree one level at a time: each narrator below writes its children's next briefs, adds or retires children, and sets its own next review. A narrator that sets no date reviews on the date `default_chapter` gives (world config; default `month`, the first day of the next calendar month). When a narrator and one of its descendants are due on the same day, the descendant's review is part of its ancestor's. Narrators at the same level of a review work in parallel. A narrator sees its own prompt and brief, its children's prompts and reports, and its own past chapters.
+- **Escalation:** any actor or narrator with a parent can call `escalate` with a reason (cash runs out in 9 days, a customer is leaving). The reason reaches its parent as an urgent report, and the parent's next review moves to the next day if it was later. In that review the parent handles it or escalates to its own parent.
 - **Turns:** every simulated day, every actor and every staff node takes one turn, all in parallel. A turn starts from the node's brief: its prompt (current revision), its chapter brief, noise in scope, and today's items (obligations due, story steps, new messages, timers firing, balance changes). The node then calls tools until it is done. "Nothing today" is a normal turn, and most days are ordinary.
 - **Agent loop:** each turn is a tool-use loop owned by the engine (`agents/loop.py`). The engine sends the role's system prompt, the node's tools and its brief, executes every tool call in each response (results for parallel calls go back together), and continues until the model replies without calling a tool or the turn reaches `max_tool_calls_per_turn` (world config). Each turn is a fresh conversation: what a node remembers between turns lives in its notes and history, reached through tools. Each role's system prompt and tool list are byte-identical across turns and come before the brief, so they are served from the prompt cache.
 - **Tools by role:**
 
   | Role | Read | Act | Other |
   |---|---|---|---|
-  | Narrator | `children_reports`, `my_chapters` | none | `spawn_child`, `retire_child`, `brief_child`, `create_entity`, `open_account`, `grant_access`, `write_relationship`, `write_story`, `report_up` |
-  | Actor | `my_balances`, `my_statement`, `my_inbox`, `my_obligations`, `search_my_history`, `merchant_catalog` | one tool per op: `pay`, `invoice`, `card_swipe`, `refund`, `transfer_own`, `answer_obligation`, ... | `send_message`, `set_timer`, `note_to_self`, `add_quirk`, `report_up` |
+  | Narrator | `children_reports`, `my_chapters` | none | `spawn_child`, `retire_child`, `brief_child`, `schedule_review`, `create_entity`, `open_account`, `grant_access`, `write_relationship`, `write_story`, `report_up`, `escalate` |
+  | Actor | `my_balances`, `my_statement`, `my_inbox`, `my_obligations`, `search_my_history`, `merchant_catalog` | one tool per op: `pay`, `invoice`, `card_swipe`, `refund`, `transfer_own`, `answer_obligation`, ... | `send_message`, `set_timer`, `note_to_self`, `add_quirk`, `report_up`, `escalate` |
   | Staff | the accounts its institution holds | `hold_payout`, `release_payout`, `return_wire`, `flag_review`, ... | `send_message` |
 
 - **LLM decides every event:** the LLM decides every event an entity produces; paying rent on time is a decision just like paying it late. Most answers are "as agreed", so a world stays mostly ordinary, but recurring flows drift the way real ones do (rent paid on the 3rd one month, a vendor raising its price, payroll changing after a hire).
@@ -142,7 +143,7 @@ Decisions are made while the clock runs, not planned up front.
 - **Messages:** `send_message` is how nodes negotiate, dispute and chase each other. The `invoice` op sends the invoice to the payer's handler as a message and opens an obligation for it.
 - **Institution mechanics are coded:** the LLM decides what entities do; code decides how institutions record it. Fees, payout batching, settlement timing, statements, autopay pulls and interest are coded institution mechanics. An institution's staff node decides situations on top of them (hold a payout for review, return a wire), validated like any other action.
 - **Reacting to its own finances:** institutions report balances to the actors with access to an account (`my_balances`, `my_statement`). Low cash lets an actor move money between accounts it can use, delay or cut spending, chase receivables, or raise cash. A payment attempted without funds surfaces as a rejected payment or fee. Customers react the same way (pay late, short-pay, cancel). These feedback loops are intended, and each decision is logged with its `cause`.
-- **Parallelism:** nodes cannot see each other's state, so all turns on a simulated day run in parallel, as do the narrators at one level of a chapter step. The day closes when every turn has finished: the clearinghouse settles, renderers write rows, and the day's messages and the timers due tomorrow go into tomorrow's briefs.
+- **Parallelism:** nodes cannot see each other's state, so all turns on a simulated day run in parallel, as do reviews of separate subtrees and the narrators at one level of a review. The day closes when every turn has finished: the clearinghouse settles, renderers write rows, and the day's messages and the timers due tomorrow go into tomorrow's briefs.
 - **Quirks and prompt revisions:** an actor may add a quirk with `add_quirk`. It is appended to the actor's prompt as a new revision, applies from its next turn, and can be edited like any other prompt. Each revision records its text, its author (a user or an agent), and the run, day and turn it came from, and can be reverted. Later runs start from the revised prompt, so worlds can grow more eccentric over repeated runs.
 - **Logging:** runs are not reproducible, so every model request and response, and every tool call with its input and result, is recorded in the run's `log.jsonl` together with the prompt revisions and brief in force. The log is shown live and kept for every run (see Run history).
 
@@ -165,7 +166,7 @@ worlds/demo/runs/20261028T142201Z-a3f/
 - **Rerun:** rerunning with the same initial prompts creates a new sibling run directory with its own manifest copy, prompts, log and tables. Because the core is non-deterministic, the two snapshots may differ. Rerunning from an old run ("restore and run") loads that run's `manifest.yaml` and `prompts.json` as the starting point, and records it as `parent_run`.
 - **Log entries:** `{seq, ts, day, kind, ...}` where `kind` is one of:
   - run: `run_started`, `day_closed`, `run_finished`
-  - tree: `chapter_started`, `report_written` (node, parent), `brief_written` (narrator, child, chapter), `node_spawned` / `node_retired` (narrator, node)
+  - tree: `review_started` (narrator, trigger: scheduled, default or escalated, escalating node), `review_scheduled` (narrator, date, reason), `escalated` (node, parent, reason), `report_written` (node, parent), `brief_written` (narrator, child, chapter), `node_spawned` / `node_retired` (narrator, node)
   - turns: `turn_started` / `turn_finished` (node), `llm_call` (node, turn, request, response, prompt revision ids), `tool_call` (node, turn, tool, input, result), `action_rejected` (node, turn, tool, reason), `message_sent` (from, to, message id), `obligation_unanswered` (obligation id, handler), `quirk_added`
   - money: `event`, `row_rendered` (institution, table, row id, linked event ids)
 
@@ -179,12 +180,12 @@ worlds/demo/runs/20261028T142201Z-a3f/
 
 ```yaml
 world: {name: demo, start: 2021-01-01, end: 2022-06-30, currency: USD}   # seed: optional, best-effort
-config: {model: claude-opus-5-5, effort: high, chapter: month, max_tool_calls_per_turn: 40}
+config: {model: claude-opus-5-5, effort: high, default_chapter: month, max_tool_calls_per_turn: 40}
 nodes:
-  - {id: n_root, role: narrator, prompt: "Alex Rivera's life: co-founder and CEO of a B2B SaaS startup, married, lives in San Francisco"}   # holds the main prompt
+  - {id: n_root, role: narrator, next_review: 2021-04-01, prompt: "Alex Rivera's life: co-founder and CEO of a B2B SaaS startup, married, lives in San Francisco"}   # holds the main prompt
   - {id: n_alex, role: actor, parent: n_root, stands_for: p_ceo, prompt: "pitches investors, travels for big deals, uses the company card for personal things"}
-  - {id: n_company, role: narrator, parent: n_root, stands_for: co_self, prompt: "the startup: 5 staff, $1.5M seed, self-serve and enterprise customers"}
-  - {id: n_sales, role: narrator, parent: n_company, prompt: "enterprise deals and the self-serve tail"}
+  - {id: n_company, role: narrator, parent: n_root, stands_for: co_self, prompt: "the startup: 5 staff, $1.5M seed, self-serve and enterprise customers"}   # no next_review: default_chapter gives 2021-02-01
+  - {id: n_sales, role: narrator, parent: n_company, next_review: 2021-01-15, prompt: "enterprise deals and the self-serve tail"}
   - {id: n_jordan, role: actor, parent: n_sales, stands_for: p_jordan, prompt: "VP of Sales; entertains prospects, extends trips over weekends"}
   - {id: n_contoso, role: actor, parent: n_sales, stands_for: cust_contoso, prompt: "enterprise buyer, slow approvals, pays by wire"}
   - {id: n_mercury, role: staff, stands_for: inst_mercury, prompt: "small-business bank; reviews unusually large outgoing wires"}
@@ -261,7 +262,7 @@ Conventions: `snake_case` files named for the single thing they hold; one public
 
 ## Success Criteria
 
-1. `worldgen validate` rejects manifests with dangling refs (nodes, entities, accounts, access, handlers), a node tree with a cycle or more than one root, story steps outside the time range, or unknown op types, each with a pointing error message.
+1. `worldgen validate` rejects manifests with dangling refs (nodes, entities, accounts, access, handlers), a node tree with a cycle or more than one root, story steps or review dates outside the time range, or unknown op types, each with a pointing error message.
 2. `examples/saas_startup` reproduces every phenomenon in TARGET_EXAMPLE section 6 (in-transit month-end Stripe payout, many-to-one payout batching, enterprise prepay vs delivery, exec commingling, Ramp swipe-to-settle cutoff lag), asserted by tests that query the output tables.
 3. Variation without breakage: two runs of the same manifest may differ, but every run passes conservation and event-link checks (criteria 4 and 5).
 4. Conservation: for every account, opening balance + sum of its events = closing balance, and for every rendered account the rendered rows give the same closing balance; the sum of all events across the world is 0, counting the `world_boundary` account.
@@ -274,10 +275,9 @@ Conventions: `snake_case` files named for the single thing they hold; one public
 11. Run history: every run creates `runs/<run_id>/` with `run.json` and an append-only `log.jsonl`; rerunning never overwrites an earlier run. Every `row_rendered` entry matches a row in that run's tables and every `event` entry matches an event, and vice versa (tested). `runs tail` shows entries as they are appended, a killed run leaves a readable partial log with `status: failed`, and a past run can be reopened and replayed from its files alone. Each run directory contains its own `manifest.yaml` and `prompts.json`; editing the live manifest or prompts afterward leaves earlier run directories byte-identical (tested), and two runs started from the same initial prompts produce two separate snapshot directories.
 12. Every obligation is answered: each obligation due within a run has either an `answer_obligation` tool call or an `obligation_unanswered` entry, and no event pays an obligation without such a call (tested).
 13. Isolation: no brief or tool result shows a node another node's state, except messages sent to it and, for a narrator, its children's prompts and reports (tested on every brief and tool result of an `examples/saas_startup` run).
-14. Tree rules: every node except the root has exactly one parent; every node added during a run has a `node_spawned` entry naming the narrator that added it; every relationship and story was written by a narrator whose subtree holds the nodes it names (checked by `worldgen verify`).
+14. Tree rules: every node except the root has exactly one parent; every node added during a run has a `node_spawned` entry naming the narrator that added it; every relationship and story was written by a narrator whose subtree holds the nodes it names; every review has a `review_started` entry naming its trigger, and every escalation is followed by a review of its parent no later than the next day (checked by `worldgen verify`).
 
 ## Open Questions
 
 1. **Upcoming obligations:** how far ahead a handler's brief shows obligations that are not yet due, so it can plan for them (a vendor that bills monthly, a large annual renewal).
 2. **Idle turns:** an actor takes a turn every day by default. Should an actor with nothing in its brief (no items, messages or timers) still take one? A daily turn lets people act on a whim; skipping it keeps hundreds of subscribers from each inventing something to do every day, and shortens the wall-clock time of a run.
-3. **Narrator interrupts:** whether an urgent report (cash running out, a lost customer) can wake a narrator before the chapter ends.

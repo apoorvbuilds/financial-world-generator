@@ -27,6 +27,7 @@ Plan: `tasks/plan.md` (decisions D1-D6, architecture, risks). Spec: `SPEC.md`.
 - Manifest Shape: `nodes[].brief`.
 - Commands: `worldgen prompts history|revert` (D5k) and `--overlay` (D5l).
 - Run history: `run_started` lists the starting tree (D6), and what a spawned node and the contact rule are, as answered.
+- Simulation Model: the `default_chapter` values (D5m), escalations read within a review under way (D5n), and what a report turn can do (D5o).
 - Open Questions: resolved as in D3.
 
 Also bring TARGET_EXAMPLE.md in line with SPEC: the root narrator replaces "the authoring agents", self-serve subscribers become actor nodes instead of a cohort, institutions get staff nodes, and each table is "written only by <institution>'s renderer". Write only the current design, with no mention of removed alternatives.
@@ -74,8 +75,8 @@ Also bring TARGET_EXAMPLE.md in line with SPEC: the root narrator replaces "the 
 
 **Description:** Define frozen pydantic v2 models:
 - `World`: name, start, end, currency, `schema_version`, optional seed.
-- `Config`: model, effort, chapter, `max_tool_calls_per_turn`. Later tasks add their own tunables.
-- `Node`: id, role (narrator, actor or staff), parent, `stands_for`, prompt, brief.
+- `Config`: model, effort, `default_chapter` (D5m), `max_tool_calls_per_turn`. Later tasks add their own tunables.
+- `Node`: id, role (narrator, actor or staff), parent, `stands_for`, prompt, brief, `next_review`.
 - `Entity`: id, kind, name, descriptors, institution.
 - `Account`: id, holder, `at`, kind, name, opening, limit.
 - `Access`: node, account, `can`.
@@ -83,8 +84,8 @@ Also bring TARGET_EXAMPLE.md in line with SPEC: the root narrator replaces "the 
 
 Money fields parse from 2dp strings to `Decimal` and reject floats. Unknown fields are rejected.
 
-Write `examples/tracer/manifest.yaml`:
-- **Narrators:** `n_root`, the founder's life, and under it `n_company`.
+Write `examples/tracer/manifest.yaml`, over the D1 window (2021-03-22..2021-04-05):
+- **Narrators:** `n_root`, the founder's life, and under it `n_company`, with `next_review: 2021-03-29`. `n_root` sets no review date, so its first review is the default, 2021-04-01.
 - **Actors:** `n_morgan`, the ops manager with `ach` and `wire` access on X0666, under `n_company`; `n_investor` and `n_landlord` under `n_root`.
 - **Staff:** `n_mercury`.
 - **Entities:** the company, Morgan, the investor, the landlord and Mercury.
@@ -144,7 +145,8 @@ The tracer manifest gains `r_equity`, a $1.5M wire due on the start day, and `r_
   - there are no cycles
   - every parent is a narrator and every actor is a leaf
   - staff nodes have no parent and stand for an institution
-- **time_range** checks that story steps and term dates fall inside the world range.
+  - only narrators have a `next_review`
+- **time_range** checks that story steps and term dates fall inside the world range, and that each `next_review` falls after the start day and no later than the end.
 
 `worldgen validate <manifest>` prints one error per problem, each with a pointer (for example `relationships[3].handlers.co_self: unknown node 'n_jordn'`), and exits 1 if there are any.
 
@@ -165,13 +167,13 @@ The tracer manifest gains `r_equity`, a $1.5M wire due on the start day, and `r_
 ## Task 5: Clock, Rng and money
 
 **Description:**
-- `Clock` maps dates to day indices from the world start. It answers business-day questions on the Federal Reserve holiday calendar, computed in code with no added dependency. On that calendar a Saturday holiday does not close the preceding Friday. It also answers chapter questions: is this the last day of a chapter, and does this day open one?
+- `Clock` maps dates to day indices from the world start. It answers business-day questions on the Federal Reserve holiday calendar, computed in code with no added dependency. On that calendar a Saturday holiday does not close the preceding Friday. It also gives the default review date for a `default_chapter` value (D5m): the first day of the next calendar week, month or quarter after a given day.
 - `Rng` wraps `random.Random` with an optional best-effort seed. It is the only source of randomness for coded mechanics, and it also generates UUIDs.
 - The `money` helpers quantize `Decimal` to cents, parse and format 2dp strings, and raise on float input.
 
 **Acceptance criteria:**
 - [ ] hypothesis: `add_business_days(d, n)` never lands on a weekend or holiday and is at least d+n calendar days
-- [ ] Known dates hold: 2021-07-05 is closed, 2021-12-24 is open, 2022-06-20 is closed; 2021-03-31 is the last day of a monthly chapter
+- [ ] Known dates hold: 2021-07-05 is closed, 2021-12-24 is open, 2022-06-20 is closed; the `month` default after 2021-03-22 is 2021-04-01 and after 2021-04-01 is 2021-05-01; the `week` default after Friday 2021-03-26 is Monday 2021-03-29
 - [ ] `format(Decimal("-642.2")) == "-642.20"`; float input raises `TypeError`
 
 **Verification:**
@@ -399,7 +401,7 @@ Also add `tests/support/as_agreed.py`, a scripted policy that pays every obligat
 
 ## Task 15: Day loop
 
-**Description:** `engine/day.py` runs one simulated day in the order set in the plan: build briefs, run every actor's turn in parallel (a `TaskGroup`), then close the day. Day close settles the clearinghouse, calls the institution mechanics and render hooks (empty until Task 16), and moves tomorrow's items into place. `engine/engine.py` loops over the world range. Staff nodes start taking turns in Task 30. `idle_turns` (D3) is read from config.
+**Description:** `engine/day.py` runs one simulated day in the order set in the plan: the reviews due that day (an empty step until Task 21), build briefs, run every actor's turn in parallel (a `TaskGroup`), then close the day. Day close settles the clearinghouse, calls the institution mechanics and render hooks (empty until Task 16), and moves tomorrow's items into place. `engine/engine.py` loops over the world range. Staff nodes start taking turns in Task 30. `idle_turns` (D3) is read from config.
 
 This task adds two log entries: `event`, one per event, by id; and `day_closed`.
 
@@ -526,6 +528,7 @@ The `JsonFiles` sink keeps each table keyed by row id (re-rendering an id replac
 - rejected actions by reason
 - follow-ups and unanswered obligations
 - deviations, messages and spawns
+- reviews by trigger, chapter lengths per narrator, and escalations
 - report and brief lengths
 - rows per table
 - tokens (input, output, cache read, cache write) and latency
@@ -555,36 +558,44 @@ These numbers are how the loop gets judged.
 
 ## Phase 3: Narrator tree
 
-## Task 21: Chapters, part 1: reports up
+## Task 21: Reviews, part 1: review dates and reports up
 
 **Description:**
-- On the last day of a chapter, an actor's brief asks for a report. The actor gives it with `report_up`.
-- On the first day of the next chapter, narrators take turns level by level, starting from the deepest level, with narrators on the same level running in parallel. Each reads `children_reports` and gives its own `report_up`.
-- A narrator sees its own prompt and brief, and its children's prompts and reports.
-- Add the narrator role (system template plus tools).
+- **Review dates:** `tree/reviews.py` keeps each narrator's next review date. It starts from the manifest's `next_review`, or else the `default_chapter` date after the start day. Until Task 22, a narrator's next date after a review is the default date after that review day. Each day, before briefs are built, the day loop asks which narrators are due:
+  - A narrator due on the same day as one of its ancestors is reviewed as part of the ancestor's review.
+  - Reviews of separate subtrees run in parallel.
+- **Report turns:** a review starts with a report turn for every actor in the subtree, all in parallel. The report brief asks what happened since the actor's last report, and lists the actor's own events and obligation answers since then, read through `NodeView`. The actor answers with `report_up`. Act tools are rejected in a report turn (D5o).
+- **Reports up:** narrators below the reviewing narrator then take turns level by level, starting from the deepest, with narrators on the same level running in parallel. Each reads `children_reports` and gives its own `report_up`. A child that didn't report shows as "no report" to its parent.
+- **Narrator role:** add the narrator system template and tool set. A narrator sees its own prompt and brief, and its children's prompts and reports. `tests/support/as_agreed.py` learns to write stock reports.
 
-Log entries: `chapter_started` and `report_written`. A child that didn't report shows as "no report" to its parent.
+Log entries: `review_started` (narrator and trigger, `scheduled` or `default`) and `report_written`.
 
 **Acceptance criteria:**
-- [ ] Across a tracer run spanning 2021-03-31/04-01, every actor is asked for a report on 03-31, and `n_company` reports before `n_root`
-- [ ] Narrators on the same level are in flight at the same time (barrier test)
-- [ ] `children_reports` returns only the narrator's own children's reports
+- [ ] In the tracer, `n_company` reviews on 2021-03-29 (trigger `scheduled`) and `n_root` on 2021-04-01 (trigger `default`), each before that day's turns, and `n_morgan`'s report comes before `n_company`'s
+- [ ] On 04-01, `n_company`'s default review runs inside `n_root`'s, with one `review_started` entry, and on a fixture tree, two sibling narrators due on the same day review in parallel (barrier test)
+- [ ] `children_reports` returns only the narrator's own children's reports, and an act tool called in a report turn is rejected with a reason
 
 **Verification:**
-- [ ] Tests pass: `uv run pytest -q tests/tree/test_chapters.py tests/tools`
+- [ ] Tests pass: `uv run pytest -q tests/tree/test_reviews.py tests/tools`
 - [ ] Gate passes
 
 **Dependencies:** Task 15
-**Files likely touched:** `worldgen/tree/chapters.py`, `worldgen/tools/tree/report_up.py`, `worldgen/tools/read/children_reports.py`, `worldgen/agents/{roles/narrator.py,templates/narrator.md}`, `worldgen/runs/entries/{chapter_started,report_written}.py`
+**Files likely touched:** `worldgen/tree/reviews.py`, `worldgen/engine/day.py`, `worldgen/tools/tree/report_up.py`, `worldgen/tools/read/children_reports.py`, `worldgen/agents/{roles/narrator.py,templates/narrator.md}`, `worldgen/runs/entries/{review_started,report_written}.py`
 **Estimated scope:** M (small tool files)
 
-## Task 22: Chapters, part 2: briefs down
+## Task 22: Reviews, part 2: briefs down and `schedule_review`
 
-**Description:** After the reports go up, narrators take turns from the root down, level by level, and write each child's next chapter brief with `brief_child`. A child that gets no new brief keeps its old one. `my_chapters` returns a narrator's own past chapters (the reports it read, the reports it wrote, and the briefs it wrote). A new chapter brief replaces the old one in an actor's brief from the next turn. The `brief_written` entry is added.
+**Description:** After the reports go up, the reviewing narrator reads its children's reports. It then writes each child's next brief with `brief_child` and sets its own next review with `schedule_review`, which takes a date and a reason. Briefs then go down the subtree level by level, with narrators on the same level in parallel. Each narrator below writes its children's next briefs and sets its own next review.
+- A narrator that sets no date gets the `default_chapter` date after the review day. This is logged as `review_scheduled` with reason `default`.
+- A child that gets no new brief keeps its old one. A new brief replaces the old one in an actor's brief from its next turn, which is that same day's turn.
+- `my_chapters` returns a narrator's own past chapters: the reports it read and wrote, the briefs it wrote and the review dates it set.
+- `as_agreed` writes stock briefs and sets no review date.
+
+Log entries: `brief_written` and `review_scheduled`.
 
 **Acceptance criteria:**
-- [ ] After the chapter step on 04-01, each actor's brief carries the brief its parent wrote that day
-- [ ] The root writes its briefs before `n_company` writes any
+- [ ] In `n_root`'s review on 04-01, the root writes its briefs before `n_company` writes any, and each actor's turn that day carries the brief its parent has just written
+- [ ] A date set with `schedule_review` brings a `review_started` on that date (trigger `scheduled`), and a narrator that sets none reviews on the default date (trigger `default`); a date that isn't after today, or that falls past the world end, is rejected with a reason
 - [ ] `brief_child` to a node that isn't the caller's child is rejected with a reason
 
 **Verification:**
@@ -592,8 +603,29 @@ Log entries: `chapter_started` and `report_written`. A child that didn't report 
 - [ ] Gate passes
 
 **Dependencies:** Task 21
-**Files likely touched:** `worldgen/tree/chapters.py`, `worldgen/tools/tree/brief_child.py`, `worldgen/tools/read/my_chapters.py`, `worldgen/runs/entries/brief_written.py`
-**Estimated scope:** S
+**Files likely touched:** `worldgen/tree/reviews.py`, `worldgen/tools/tree/{brief_child,schedule_review}.py`, `worldgen/tools/read/my_chapters.py`, `worldgen/runs/entries/{brief_written,review_scheduled}.py`
+**Estimated scope:** M (small tool files)
+
+## Task 22b: Escalation
+
+**Description:** `escalate` takes a reason and is a tool for both actors and narrators. The reason reaches the caller's parent as an urgent report, which `children_reports` lists first and marks as urgent. Delivery follows D5n:
+- If a review that covers the parent is under way and the parent hasn't read its children's reports yet, the parent reads the escalation in that review.
+- Otherwise the parent's next review moves to the next day if it was later, with trigger `escalated` naming the escalating node. Several escalations to one parent bring one review.
+
+In that review the parent handles the escalation or escalates to its own parent. The root's call is rejected because it has no parent. The `escalated` entry records the reason and which delivery applied, so `verify` can check SC14 from the log (Task 25).
+
+**Acceptance criteria:**
+- [ ] `n_morgan` escalating in its turn on 03-30 brings `n_company`'s review to 03-31 with trigger `escalated` naming `n_morgan`, and an escalation to a parent already due the next day changes no date
+- [ ] An escalation in a report turn on 03-29 is read in that same review of `n_company`, and `n_company` escalating in it brings `n_root`'s review to 03-30
+- [ ] The root's `escalate` is rejected with a reason, and the urgent report reaches no node other than the parent
+
+**Verification:**
+- [ ] Tests pass: `uv run pytest -q tests/tree/test_reviews.py tests/tools/tree`
+- [ ] Gate passes
+
+**Dependencies:** Task 22
+**Files likely touched:** `worldgen/tools/tree/escalate.py`, `worldgen/tree/reviews.py`, `worldgen/tools/read/children_reports.py`, `worldgen/agents/roles/{actor,narrator}.py`, `worldgen/runs/entries/escalated.py`
+**Estimated scope:** M
 
 ## Task 23: Growing the tree
 
@@ -604,10 +636,10 @@ Log entries: `chapter_started` and `report_written`. A child that didn't report 
 - `open_account`: the holder must be an entity that a node in the caller's subtree stands for.
 - `grant_access`: the grantee must be a node in the caller's subtree.
 
-`tree/spawn.py` applies these changes to the live tree, the account registry and the `NodeView`s. A spawned node takes its first turn the next day; a retired node takes no more turns. Log entries: `node_spawned` and `node_retired`, each naming the narrator.
+`tree/spawn.py` applies these changes to the live tree, the account registry and the `NodeView`s. A spawned actor takes its first turn the next day. A narrator spawned during a review takes its turn at the next level of that review's briefs-down pass, so it can brief and spawn its own children and set its first review. A retired node takes no more turns. Log entries: `node_spawned` and `node_retired`, each naming the narrator.
 
 **Acceptance criteria:**
-- [ ] A hire spawned on day d takes its first turn on d+1 with the brief it was given, and can use the card account it was granted
+- [ ] A hire spawned on day d takes its first turn on d+1 with the brief it was given, and can use the card account it was granted; a narrator spawned in a review briefs its own children in that same review
 - [ ] Retiring a node that still handles an active relationship is rejected, and the reason lists those relationships
 - [ ] Every node added during a run has a `node_spawned` entry naming the narrator
 
@@ -643,27 +675,32 @@ The tracer's `n_company` can now take on a vendor during a run.
 ## Task 25: Tree-rule and isolation validators
 
 **Description:** Two validators that `worldgen verify` runs on every run:
-- **tree_rules** (SC14): every node except the root has exactly one parent; every node added during a run has a `node_spawned` entry; and every relationship and story, whether from day 0 or written during the run, was written by a narrator whose subtree holds the nodes it names.
-- **isolation** (SC13): for each node's `llm_call` requests, no other node's private text appears. Private text means prompt revisions, notes and chapter briefs. The exceptions are messages sent to the node and, for a narrator, its children's prompts and reports.
+- **tree_rules** (SC14):
+  - every node except the root has exactly one parent
+  - every node added during a run has a `node_spawned` entry
+  - every relationship and story, whether from day 0 or written during the run, was written by a narrator whose subtree holds the nodes it names
+  - every review has a `review_started` entry naming its trigger
+  - every escalation is followed, no later than the next day, by a review of its parent: either the review under way that its `escalated` entry names, or a later review whose subtree holds the parent
+- **isolation** (SC13): for each node's `llm_call` requests, no other node's private text appears. Private text means prompt revisions, notes and chapter briefs. The exceptions are messages sent to the node and, for a narrator, its children's prompts and reports, escalations included.
 
 The isolation test plants a unique canary in every node's prompt, notes and brief, then runs the tracer through the `as_agreed` policy.
 
 **Acceptance criteria:**
 - [ ] The canary tracer run passes isolation, and a planted leak (one node's brief containing another node's prompt) fails it
-- [ ] Each tree rule catches its corrupted-run fixture
+- [ ] Each tree rule catches its corrupted-run fixture, including an escalation with no review of its parent by the next day
 - [ ] Both validators have 100% line coverage
 
 **Verification:**
 - [ ] Tests pass: `uv run pytest -q tests/validators`
 - [ ] Gate passes
 
-**Dependencies:** Tasks 18, 24
+**Dependencies:** Tasks 18, 22b, 24
 **Files likely touched:** `worldgen/validators/{tree_rules,isolation}.py`, `tests/support/canaries.py`
 **Estimated scope:** M
 
 ## Checkpoint 3: Narrator tree (after Tasks 21-25)
 - [ ] Gate passes
-- [ ] A live tracer run across 03-31/04-01 is reviewed with the user: the reports, the briefs, and any spawns or relationships written
+- [ ] A live tracer run over its full range is reviewed with the user: the review dates narrators chose and why, any escalations, the reports and briefs, and any spawns or relationships written
 - [ ] Decide on changes to the narrator template before actor life and institutions build on it
 
 ---
@@ -672,7 +709,7 @@ The isolation test plants a unique canary in every node's prompt, notes and brie
 
 ## Task 26: Messages and inbox
 
-**Description:** `send_message` (to a node, with text and an optional reference to a relationship or obligation) follows the contact rule: an actor can message the handlers on the other side of the relationships it handles, and anyone who has messaged it. Messages are delivered to the recipient's inbox the next day and appear among its items. `my_inbox` reads the inbox. A `message_sent` entry is logged. The isolation validator learns that delivered messages are an allowed channel.
+**Description:** `send_message` (to a node, with text and an optional reference to a relationship or obligation) follows the contact rule: an actor can message the handlers on the other side of the relationships it handles, and anyone who has messaged it. Messages are delivered to the recipient's inbox the next day and appear among its items. `send_message` is rejected in a report turn (D5o). `my_inbox` reads the inbox. A `message_sent` entry is logged. The isolation validator learns that delivered messages are an allowed channel.
 
 **Acceptance criteria:**
 - [ ] A message sent on day d appears in the recipient's brief on d+1 and not on d
@@ -978,6 +1015,7 @@ Paying runs the `payroll_run` op, and the Rippling mechanics then:
 - **Accounts:** Mercury (three accounts), Stripe, Ramp and Rippling.
 - **Relationships:** with the terms from TARGET_EXAMPLE section 4.
 - **Day-0 briefs** for every node.
+- **Review dates:** `next_review: 2021-03-29` on the sales narrator. The other narrators take the default, so the window holds a scheduled department review and, on 04-01, the default review of the whole tree.
 
 The first version is plain: no stories and no one-off noise. The NYC trip story and the Contoso noise go in `examples/saas_startup/extras/` as overlays. `validate` and `simulate` accept `--overlay <file>`, which merges lists by id.
 
@@ -999,7 +1037,7 @@ The first version is plain: no stories and no one-off noise. The NYC trip story 
 **Description:** Run `saas_startup` live over the D1 window through `RecordingLlm`, once with `idle_turns: always` and once with `when_items` (D3). Commit the recorded fixtures; they are synthetic, with no real PII. Add replay tests that query the output tables for phenomena 1, 2 and 5. Write a review note in `tasks/milestone-15d.md` covering:
 - both `runs show` summaries, with wall-clock time per day
 - sample deviations
-- the chapter step on 04-01
+- the reviews in the window: the dates narrators chose, their triggers, any escalations, and report turns per review
 - anything that looked unrealistic
 
 **Acceptance criteria:**
@@ -1018,7 +1056,7 @@ The first version is plain: no stories and no one-off noise. The NYC trip story 
 
 ## Checkpoint 6: Milestone (after Tasks 38-39)
 - [ ] Gate passes
-- [ ] The user reviews the live 15-day run and decides on prompt, tool or template changes
+- [ ] The user reviews the live 15-day run and decides on prompt, tool or template changes, including how often narrators review and escalate
 - [ ] Settle the `idle_turns` default from the measurements, and write it into SPEC.md
 
 ---
@@ -1029,13 +1067,13 @@ The first version is plain: no stories and no one-off noise. The NYC trip story 
 
 **Description:** `tree/day_zero.py` runs the tree to day 0:
 1. The root narrator gets the main prompt and the day-0 section of the narrator template, which asks for a plain first generation: only what the prompt asks for.
-2. It uses the tree tools from Tasks 23-24 to spawn children; create entities, accounts, access grants, relationships and stories; and brief each child.
+2. It uses the tree tools from Tasks 22-24 to spawn children; create entities, accounts, access grants, relationships and stories; brief each child; and set its first review with `schedule_review`.
 3. Each new narrator then takes its own day-0 turn, top-down and level by level, with narrators on the same level in parallel. Actors take no day-0 turns.
 
-`manifest/writer.py` serializes the resulting tree state, including `nodes[].brief`, to `manifest.yaml`. The authoring log goes to `<world_dir>/authoring/<id>/log.jsonl` (D5j).
+`manifest/writer.py` serializes the resulting tree state, including `nodes[].brief` and `nodes[].next_review`, to `manifest.yaml`. The authoring log goes to `<world_dir>/authoring/<id>/log.jsonl` (D5j).
 
 **Acceptance criteria:**
-- [ ] With `FakeLlm` fixtures, a TARGET_EXAMPLE-like prompt yields a manifest that loads, and the written manifest round-trips
+- [ ] With `FakeLlm` fixtures, a TARGET_EXAMPLE-like prompt yields a manifest that loads, and the written manifest round-trips, including each review date a narrator set
 - [ ] A prompt with no one-offs produces no stories and no noise
 - [ ] Levels run in order, and narrators on the same level are in flight at the same time
 
