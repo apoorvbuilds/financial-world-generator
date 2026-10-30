@@ -32,7 +32,8 @@ These are missing from SPEC.md or were chosen during its rewrite without confirm
 | D2 | **Milestone manifest source** | Hand-write `examples/saas_startup` (tree, entities, accounts, access, relationships, day-0 briefs). The milestone then judges the run loop by itself. Authoring comes after it and is compared against the hand-written manifest. | Phases 6-7 order |
 | D3 | **SPEC open questions** | **OQ1:** a brief lists obligations due today and overdue ones, and `my_obligations` also shows the next `obligation_horizon_days` (config, default 30). **OQ2:** every actor takes a daily turn. Config `idle_turns: always\|when_items` (default `always`) lets the milestone measure the cost of the other choice. **OQ3:** no interrupts; narrators act only at chapter boundaries. | Tasks 13, 15 |
 | D4 | **SPEC choices made during the rewrite** | Default model `claude-opus-5-5`; the Account and Access model; staff nodes outside the tree; monthly chapters. | Task 2 |
-| D5 | **Gap-fills** (SPEC is silent on these) | **(a)** Every entity gets an implicit `external` account (tracked, not rendered) unless it declares one, so catalog merchants, customers and employees can receive money. `world_boundary` is only for money from outside the world. **(b)** An op emits an initiation event into one clearing account per channel; the clearinghouse later emits the linked settlement event. **(c)** Events gain `args` (the op's validated arguments, such as merchant, memo or invoice id) and `links` (related event ids), so renderers never read the run log. Record-only ops, such as an invoice being issued, emit a zero-amount event so their rows still link to one. **(d)** Available funds are the posted balance minus pending outflows. An act tool reserves funds when it runs; act tools don't await, so check-and-reserve is atomic under asyncio. **(e)** `nodes[].brief` holds each node's day-0 brief. Authoring happens at the start of day 0, and day 0's turns follow it. **(f)** The live prompt history is `<world_dir>/prompt_history.json`. A revision id is a content hash, so ids exist before that file does. **(g)** Each institution is a package `worldgen/institutions/<name>/` holding `renderer.py`, one file per mechanic and its row models; the engine loads it by name. **(h)** The merchant catalog is `worldgen/catalog/merchants.yaml` (name, category, price range, descriptors), and vendor entities in the manifest extend it. A `card_swipe` at a merchant found in neither is rejected. **(i)** A deviation is an `answer_obligation` whose decision isn't `pay`, or that pays a different amount or day from the terms. It drives `runs tail --deviations-only` and the deviation counts. **(j)** `worldgen author` writes its log to `<world_dir>/authoring/<id>/log.jsonl`, in the same format as a run log. **(k)** Users edit prompts in the manifest, and `simulate` records each changed prompt as a `user` revision. `worldgen prompts history\|revert` lists and reverts revisions. | Tasks 2, 6, 16, 31, 40, 43 |
+| D5 | **Gap-fills** (SPEC is silent on these) | **(a)** Every entity gets an implicit `external` account (tracked, not rendered) unless it declares one, so catalog merchants, customers and employees can receive money. `world_boundary` is only for money from outside the world. **(b)** An op emits an initiation event into one clearing account per channel; the clearinghouse later emits the linked settlement event. **(c)** Events gain `args` (the op's validated arguments, such as merchant, memo or invoice id) and `links` (related event ids), so renderers never read the run log. Record-only ops, such as an invoice being issued, emit a zero-amount event so their rows still link to one. **(d)** Available funds are the posted balance minus pending outflows. An act tool reserves funds when it runs; act tools don't await, so check-and-reserve is atomic under asyncio. **(e)** `nodes[].brief` holds each node's day-0 brief. Authoring happens at the start of day 0, and day 0's turns follow it. **(f)** The live prompt history is `<world_dir>/prompt_history.json`. A revision id is a content hash, so ids exist before that file does. **(g)** Each institution is a package `worldgen/institutions/<name>/` holding `renderer.py`, one file per mechanic and its row models; the engine loads it by name. **(h)** The merchant catalog is `worldgen/catalog/merchants.yaml` (name, category, price range, descriptors), and vendor entities in the manifest extend it. A `card_swipe` at a merchant found in neither is rejected. **(i)** A deviation is an `answer_obligation` whose decision isn't `pay`, or that pays a different amount or day from the terms. It drives `runs tail --deviations-only` and the deviation counts. **(j)** `worldgen author` writes its log to `<world_dir>/authoring/<id>/log.jsonl`, in the same format as a run log. **(k)** Users edit prompts in the manifest, and `simulate` records each changed prompt as a `user` revision. `worldgen prompts history\|revert` lists and reverts revisions. **(l)** `validate` and `simulate` take `--overlay <file>`, which merges extra stories and noise into a manifest by id, so the plain `examples/saas_startup` and its one-offs live in separate files. | Tasks 2, 6, 16, 31, 38, 40, 43 |
+| D6 | **Overview and subagents** | The overview is the CLI. `run_started` lists every seed node (role, parent, `stands_for`), so `runs tail` opens with the starting tree, and `runs show` prints the tree with its spawns and retirements. A subagent is a node a narrator spawns with `spawn_child`: a new participant in the world. Actors don't spawn. Who can message whom follows SPEC's contact rule: the handlers on the other side of a relationship, and anyone who has messaged you. | Tasks 7, 20, 23, 26 |
 
 ## Architecture Decisions
 
@@ -51,7 +52,7 @@ These are missing from SPEC.md or were chosen during its rewrite without confirm
 
   An isolation validator scans the requests in `log.jsonl` for other nodes' private text.
 - **Conservation by construction.** Every event moves money between two accounts, and clearing accounts hold money in flight. `verify` re-checks conservation on every run, and hypothesis tests cover ops and mechanics.
-- **Obligations carry their paying op.** Each terms type compiles into dated obligations and declares the op that pays them: `pay` for rent, `stripe_charge` for a subscription, `payroll_run` for payroll. `answer_obligation` executes that op with the same validation as any other act tool.
+- **Obligations carry their paying op.** Each terms type compiles into dated obligations, and the terms type and channel decide the op that pays them: `pay` for rent, `card_swipe` for a SaaS tool billed to a Ramp card, `stripe_charge` for a subscription, `payroll_run` for payroll. `answer_obligation` executes that op from the account the handler names, with the same validation as any other act tool.
 - **Pluggable institutions.** The engine never imports a specific institution. Mechanics hook into day close, and renderers read settled events on their own institution's accounts. Row descriptions come from counterparty descriptors, so a payout shows up as `Deposit - STRIPE` without Mercury knowing anything about Stripe.
 - **Updatable rows.** Rows are keyed by id, and rendering an id again replaces the row. This covers backfilling `payout_id` and `statement_id` and moving a payout from `in_transit` to `paid`. Every render logs `row_rendered`.
 - **Row schemas.** Each output table has a pydantic row model at runtime. Tests also validate rows against TARGET_EXAMPLE's JSON Schemas, copied to `worldgen/institutions/schemas/`, using `jsonschema` as a dev-only dependency.
@@ -62,7 +63,7 @@ These are missing from SPEC.md or were chosen during its rewrite without confirm
 ## Task List (index; status is tracked in `tasks/todo.md`)
 
 **Phase 0: Decisions**
-- Task 0: Confirm D1-D5 and sync SPEC.md and TARGET_EXAMPLE.md
+- Task 0: Confirm D1-D6 and sync SPEC.md and TARGET_EXAMPLE.md
 
 **Phase 1: Foundation and tracer bullet (fake LLM)**
 - Task 1: Project scaffold and CLI entry point
@@ -107,7 +108,8 @@ These are missing from SPEC.md or were chosen during its rewrite without confirm
 - **Checkpoint 4**
 
 **Phase 5: Institutions (three lanes)**
-- Task 31: Merchant catalog, descriptors, `card_swipe` and Ramp transactions
+- Task 31: Merchant catalog, `card_swipe` and Ramp transactions
+- Task 31b: Vendors that bill a card
 - Task 32: Ramp statements and autopay
 - **Checkpoint 5a:** Ramp
 - Task 33: Stripe subscriptions, charges, fees and invoices
@@ -163,7 +165,7 @@ These are missing from SPEC.md or were chosen during its rewrite without confirm
 
 - **Must be sequential:** the core, Tasks 5-18.
 - **After Checkpoint 2:** the narrator lane (21-25) and the actor-life lane (26-28) both add sections to `tree/briefs.py`. They can run in parallel if the brief is composed from ordered section functions and each lane adds its own.
-- **After Checkpoint 4, three institution lanes:** Ramp (31-32), Stripe (33-35), and Rippling plus Mercury (36-37). Each lane works in its own institution package and adds its own op files, so they don't conflict.
+- **After Checkpoint 4, three institution lanes:** Ramp (31, 31b, 32), Stripe (33-35), and Rippling plus Mercury (36-37). Each lane works in its own institution package and adds its own op files, so they don't conflict.
 - **Authoring (40-42)** needs only the tree tools (21-24) and `validate`, so it can run alongside Phases 4-6.
 - **Run history (43-47)** needs only Tasks 13, 17, 20 and 29, so it can run alongside Phases 5-7.
 
@@ -184,4 +186,4 @@ These are missing from SPEC.md or were chosen during its rewrite without confirm
 
 ## Open Questions
 
-- D1-D5 above. D3-D5 are needed before Task 2; D1 and D2 by Phase 6.
+- D1-D6 above. D3-D5 are needed before Task 2, D6 before Task 7, and D1 and D2 by Phase 6.

@@ -1,6 +1,6 @@
 # Tasks: Financial World Generator
 
-Plan: `tasks/plan.md` (decisions D1-D5, architecture, risks). Spec: `SPEC.md`.
+Plan: `tasks/plan.md` (decisions D1-D6, architecture, risks). Spec: `SPEC.md`.
 
 **Rules for every task**
 
@@ -12,26 +12,27 @@ Plan: `tasks/plan.md` (decisions D1-D5, architecture, risks). Spec: `SPEC.md`.
   ```
 - Every source file listed gets a mirrored test under `tests/`. Test files are not listed separately.
 - Tests use `FakeLlm` (scripted or replaying fixtures) or the `tests/support/as_agreed.py` policy. Live tests live in `tests/live/` and run only with `WORLDGEN_LIVE=1`.
-- A task that changes the manifest schema updates `docs/manifest-reference.md` once that file exists (Task 52).
+- A task that changes the manifest schema updates `docs/manifest-reference.md` once that file exists (Task 48).
 - Commit after each task. Commit messages carry no Claude attribution lines.
 
 ---
 
 ## Phase 0: Decisions
 
-## Task 0: Confirm D1-D5 and sync SPEC.md and TARGET_EXAMPLE.md
+## Task 0: Confirm D1-D6 and sync SPEC.md and TARGET_EXAMPLE.md
 
-**Description:** Get the user's answers to D1-D5 in `tasks/plan.md` and write them into SPEC.md as current design:
+**Description:** Get the user's answers to D1-D6 in `tasks/plan.md` and write them into SPEC.md as current design:
 - Project Structure: institution packages and the merchant catalog.
 - Core Concepts: the Event fields `args` and `links`, and zero-amount record events.
 - Manifest Shape: `nodes[].brief`.
-- Commands: `worldgen prompts history|revert` (D5k).
+- Commands: `worldgen prompts history|revert` (D5k) and `--overlay` (D5l).
+- Run history: `run_started` lists the starting tree (D6), and what a spawned node and the contact rule are, as answered.
 - Open Questions: resolved as in D3.
 
 Also bring TARGET_EXAMPLE.md in line with SPEC: the root narrator replaces "the authoring agents", self-serve subscribers become actor nodes instead of a cohort, institutions get staff nodes, and each table is "written only by <institution>'s renderer". Write only the current design, with no mention of removed alternatives.
 
 **Acceptance criteria:**
-- [ ] D1-D5 each have a recorded answer in `tasks/plan.md`
+- [ ] D1-D6 each have a recorded answer in `tasks/plan.md`
 - [ ] SPEC.md and TARGET_EXAMPLE.md agree with each other and with the answers
 - [ ] Both files describe only the current design
 
@@ -106,11 +107,14 @@ Write `examples/tracer/manifest.yaml`:
 
 **Description:**
 - `Relationship`: id, parties, kind, `written_by`, handlers, prompt, optional terms, channel.
-- Terms are a discriminated union on `type`. This task adds `one_time` and `monthly_fixed`.
+- Terms are a discriminated union on `type`. This task adds:
+  - `one_time`: one amount on one day.
+  - `recurring_fixed`: one amount every month, quarter or year, on a given day (rent, a retainer, an annual plan).
+  - `prepaid_annual`: one up-front payment for a service period with a start and an end (Contoso's contract).
 - `Story`: id, `written_by`, steps. Each step has a day, an actor, an intent, and optionally a merchant and an amount.
 - `Noise`: a scope (world, node, relationship, story or step) plus a prompt.
 
-The tracer manifest gains `r_equity`, a $1.5M wire due on the start day, and `r_lease`, $7,000 by ACH on the 1st of each month, handled by `n_morgan`.
+The tracer manifest gains `r_equity`, a $1.5M wire due on the start day, and `r_lease`, a monthly `recurring_fixed` term of $7,000 by ACH on the 1st, handled by `n_morgan`.
 
 **Acceptance criteria:**
 - [ ] The extended tracer manifest loads and round-trips
@@ -122,7 +126,7 @@ The tracer manifest gains `r_equity`, a $1.5M wire due on the start day, and `r_
 - [ ] Gate passes
 
 **Dependencies:** Task 2
-**Files likely touched:** `worldgen/manifest/{relationship,story,noise}.py`, `worldgen/manifest/terms/{one_time,monthly_fixed}.py`, `examples/tracer/manifest.yaml`
+**Files likely touched:** `worldgen/manifest/{relationship,story,noise}.py`, `worldgen/manifest/terms/{one_time,recurring_fixed,prepaid_annual}.py`, `examples/tracer/manifest.yaml`
 **Estimated scope:** M (small model files)
 
 ## Task 4: `worldgen validate`: references, tree, time range
@@ -207,7 +211,7 @@ The tracer manifest gains `r_equity`, a $1.5M wire due on the start day, and `r_
 - `RunLog`: appends `{seq, ts, day, kind, ...}` to `log.jsonl` and flushes after every entry.
 - `RunStore`: creates the run directory with a copy of `manifest.yaml` and a `prompts.json` snapshot (every prompt keyed by owner, with its content-hash revision id), and lists and opens runs.
 
-A run context sets `done` on success and `failed` on any exception. This task adds the `run_started` and `run_finished` entries.
+A run context sets `done` on success and `failed` on any exception. This task adds the `run_started` entry, which lists every node of the starting tree (id, role, parent, `stands_for`) so a followed log opens with the seed agents (D6), and the `run_finished` entry.
 
 **Acceptance criteria:**
 - [ ] An exception inside a run leaves a readable partial `log.jsonl` and `status: failed`
@@ -272,14 +276,14 @@ A run context sets `done` on success and `failed` on any exception. This task ad
 ## Task 10: Compiler: obligations and story steps
 
 **Description:** `Compiler` turns a `Manifest` into a `Schedule` with two parts:
-- **Obligations by day,** expanded from relationship terms. Each obligation has an id, its relationship, the handler node, payer, payee, amount, due day, channel and paying op. The handler comes from the relationship's `handlers`, or defaults to the node that stands for the party.
+- **Obligations by day,** expanded from relationship terms. Each obligation has an id, its relationship, the handler node, payer, payee, amount, due day, channel and paying op. The handler comes from the relationship's `handlers`, or defaults to the node that stands for the party. The paying op comes from the terms type and the channel; for `ach`, `wire` and `book` it is `pay` (Task 31b adds `card`).
 - **Story steps by day,** grouped by actor.
 
-Each terms expander is its own file; this task adds `one_time` and `monthly_fixed`. Obligations are clipped to the world range. The compiler can also add a single relationship to an existing schedule (needed in Task 24).
+Each terms expander is its own file; this task adds `one_time`, `recurring_fixed` and `prepaid_annual`. Obligations are clipped to the world range. The compiler can also add a single relationship to an existing schedule (needed in Task 24).
 
 **Acceptance criteria:**
-- [ ] `monthly_fixed` rent due on the 1st over 2021-03-22..2021-04-05 yields exactly one obligation, on 2021-04-01, handled by `n_morgan`
-- [ ] The equity `one_time` term yields one obligation on the start day, handled by `n_investor`
+- [ ] Monthly `recurring_fixed` rent due on the 1st over 2021-03-22..2021-04-05 yields exactly one obligation, on 2021-04-01, handled by `n_morgan`
+- [ ] The equity `one_time` term yields one obligation on the start day, handled by `n_investor`, and a `prepaid_annual` term yields one obligation on its start date
 - [ ] A story step lands on its actor's day
 
 **Verification:**
@@ -287,7 +291,7 @@ Each terms expander is its own file; this task adds `one_time` and `monthly_fixe
 - [ ] Gate passes
 
 **Dependencies:** Tasks 3, 5
-**Files likely touched:** `worldgen/compiler/{compiler,obligation,schedule}.py`, `worldgen/compiler/terms/{one_time,monthly_fixed}.py`
+**Files likely touched:** `worldgen/compiler/{compiler,obligation,schedule}.py`, `worldgen/compiler/terms/{one_time,recurring_fixed,prepaid_annual}.py`
 **Estimated scope:** M
 
 ## Task 11: Clearinghouse and channels
@@ -372,7 +376,7 @@ The first ops are `pay` (to an entity, over `ach`, `wire` or `book`) and `transf
 ## Task 14: Answering obligations
 
 **Description:** The `answer_obligation` act tool takes a decision (`pay`, `pay_late` with a new day, `short_pay` with an amount, `skip`, `dispute`, `cancel` or `change`) and a `cause`.
-- A paying answer runs the obligation's paying op, validated like any act tool.
+- A paying answer runs the obligation's paying op from an account the handler names, validated like any act tool.
 - `pay_late` moves the obligation to the new day, where it returns to the handler's brief.
 - The tool call records whether the answer is a deviation (D5i).
 
@@ -422,10 +426,12 @@ Mercury renders `mercury_transactions`:
 - `transaction_type` comes from the channel.
 - `description` and `counterparty_name` come from the counterparty's descriptors or name.
 
+`institutions/descriptors.py` (the class in SPEC's Code Style) renders a counterparty's statement name from its `descriptors`, filling `{ref}` from `Rng`. Every institution uses it.
+
 The `JsonFiles` sink keeps each table keyed by row id (re-rendering an id replaces the row) and writes `<institution>/<table>.json` at each day close. Every render logs `row_rendered` with its linked event ids.
 
 **Acceptance criteria:**
-- [ ] The tracer run renders the equity wire and the 04-01 rent ACH, each posted on a business day no earlier than its initiation
+- [ ] The tracer run renders the equity wire and the 04-01 rent ACH, each posted on a business day no earlier than its initiation, with descriptions rendered from the counterparty's descriptors
 - [ ] Every row has a `row_rendered` entry linking at least one event
 - [ ] `worldgen/engine` imports nothing from `worldgen.institutions.<name>` (import test)
 
@@ -434,7 +440,7 @@ The `JsonFiles` sink keeps each table keyed by row id (re-rendering an id replac
 - [ ] Gate passes
 
 **Dependencies:** Task 15
-**Files likely touched:** `worldgen/institutions/{institution,loader}.py`, `worldgen/institutions/mercury/{renderer,rows}.py`, `worldgen/sinks/json_files.py`, `worldgen/runs/entries/row_rendered.py`
+**Files likely touched:** `worldgen/institutions/{institution,loader,descriptors}.py`, `worldgen/institutions/mercury/{renderer,rows}.py`, `worldgen/sinks/json_files.py`, `worldgen/runs/entries/row_rendered.py`
 **Estimated scope:** M
 
 ## Task 17: `worldgen simulate`
@@ -514,7 +520,7 @@ The `JsonFiles` sink keeps each table keyed by row id (re-rendering an id replac
 
 ## Task 20: `worldgen runs list|show` with a loop-quality summary
 
-**Description:** `runs list <world_dir>` prints every run: time, status, prompt revisions (from `prompts.json` and `prompt_revisions.json`), row counts and deviation counts (D5i). `runs show <run_dir>` summarises one run from its files:
+**Description:** `runs list <world_dir>` prints every run: time, status, prompt revisions (from `prompts.json` and `prompt_revisions.json`), row counts and deviation counts (D5i). `runs show <run_dir>` opens with the run's tree (D6): every node at the start, with its role, parent, `stands_for` and prompt revision, then the nodes spawned or retired during the run and the narrator that did it. It then summarises the run:
 - turns and LLM calls
 - tool calls per turn (mean and max), and turns that hit the cap
 - rejected actions by reason
@@ -528,7 +534,7 @@ The `JsonFiles` sink keeps each table keyed by row id (re-rendering an id replac
 These numbers are how the loop gets judged.
 
 **Acceptance criteria:**
-- [ ] The summary is computed from run files alone and works on a copied run directory
+- [ ] The tree and the summary are computed from run files alone and work on a copied run directory
 - [ ] A run marked `running` whose pid is gone is listed as `failed`
 - [ ] The summary numbers match hand-counted values on a fixture run
 
@@ -778,11 +784,10 @@ Situations are validated like any other act tool.
 
 ## Phase 5: Institutions
 
-## Task 31: Merchant catalog, descriptors, `card_swipe` and Ramp transactions
+## Task 31: Merchant catalog, `card_swipe` and Ramp transactions
 
 **Description:**
 - **Catalog:** `catalog/merchants.yaml` (D5h) lists realistic merchants with a category, a price range and descriptor variants. `merchant_catalog` searches it by name or category.
-- **Descriptors:** `descriptors.py` renders a statement name from a merchant's variants, filling `{ref}` from `Rng`.
 - **`card_swipe` op:** takes a card account the actor has `card` access to, a merchant (catalog or vendor entity), an amount and an optional memo, and runs over the card channel. A swipe over the card's limit is rejected, as is a swipe at an unknown merchant (the rejection points to `merchant_catalog`).
 - **Ramp renderer:** writes `ramp_card_transactions`:
   - `swipe_date` is the initiation date and `transaction_date` is the settlement date.
@@ -801,8 +806,25 @@ Situations are validated like any other act tool.
 - [ ] Gate passes
 
 **Dependencies:** Tasks 12, 16
-**Files likely touched:** `worldgen/catalog/{merchant_catalog.py,merchants.yaml}`, `worldgen/tools/read/merchant_catalog.py`, `worldgen/institutions/descriptors.py`, `worldgen/engine/ops/card_swipe.py`, `worldgen/institutions/ramp/{renderer,rows}.py`
+**Files likely touched:** `worldgen/catalog/{merchant_catalog.py,merchants.yaml}`, `worldgen/tools/read/merchant_catalog.py`, `worldgen/engine/ops/card_swipe.py`, `worldgen/institutions/ramp/{renderer,rows}.py`
 **Estimated scope:** M
+
+## Task 31b: Vendors that bill a card
+
+**Description:** Card-on-file billing for SaaS tools, insurance and other plans billed to a Ramp card (TARGET_EXAMPLE section 4, "Company -> vendor (card)"). An obligation on a `channel: card` relationship goes to the company's handler, and a paying answer runs `card_swipe` at the vendor on a card the handler names and has `card` access to. The swipe is validated and rendered like any other.
+
+**Acceptance criteria:**
+- [ ] A monthly `recurring_fixed` Figma relationship on `channel: card` gives its handler one obligation a month, and paying it renders a `ramp_card_transactions` row with Figma's descriptor on the named card
+- [ ] Paying from a card the handler can't use, or beyond the card's limit, is rejected within the turn
+- [ ] A yearly plan yields one obligation a year, and skipping it produces no swipe and counts as a deviation
+
+**Verification:**
+- [ ] Tests pass: `uv run pytest -q tests/compiler tests/engine/ops tests/institutions/ramp`
+- [ ] Gate passes
+
+**Dependencies:** Task 31
+**Files likely touched:** `worldgen/compiler/obligation.py`, `worldgen/engine/ops/answer_obligation.py`
+**Estimated scope:** S
 
 ## Task 32: Ramp statements and autopay
 
@@ -822,7 +844,7 @@ Situations are validated like any other act tool.
 **Estimated scope:** S
 
 ## Checkpoint 5a: Ramp
-- [ ] Gate passes; the tracer plus a cardholder runs offline, and `verify` is clean
+- [ ] Gate passes; the tracer plus a cardholder and a vendor billing a card runs offline, and `verify` is clean
 
 ## Task 33: Stripe subscriptions, charges, fees and invoices
 
@@ -968,7 +990,7 @@ The first version is plain: no stories and no one-off noise. The NYC trip story 
 - [ ] Tests pass: `uv run pytest -q tests/examples`
 - [ ] Gate passes
 
-**Dependencies:** Tasks 0 (D1, D2), 25, 27, 28, 29, 32, 35, 36, 37
+**Dependencies:** Tasks 0 (D1, D2), 25, 27, 28, 29, 31b, 32, 35, 36, 37
 **Files likely touched:** `examples/saas_startup/manifest.yaml`, `examples/saas_startup/extras/{nyc_trip,contoso_noise}.yaml`, `worldgen/manifest/overlay.py`, `worldgen/cli.py`
 **Estimated scope:** M
 
