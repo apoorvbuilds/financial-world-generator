@@ -24,8 +24,10 @@ htmlcov/
 # Generated simulation output (regenerate with `worldgen simulate`)
 worlds/*/out/
 
-# Local Claude Code settings
-.claude/settings.local.json
+# Local agent tooling (skills installed per machine with `npx skills add`)
+.agents/
+.claude/
+skills-lock.json
 
 # OS / editor
 .DS_Store
