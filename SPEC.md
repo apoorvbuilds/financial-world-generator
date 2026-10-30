@@ -1,43 +1,49 @@
 # Spec: Financial World Generator
 
-Status: DRAFT for review. Generalizes the single-scenario `TARGET_EXAMPLE.md`, the kind of output this system should produce. `TARGET_EXAMPLE.md` is written as a detailed world description that doubles as the main prompt handed to the authoring agents. It is also expressed as `examples/saas_startup` (one instance of this system).
+Status: DRAFT for review. Generalizes the single-scenario `TARGET_EXAMPLE.md`, the kind of output this system should produce. `TARGET_EXAMPLE.md` is written as a detailed world description that doubles as the main prompt handed to the root narrator. It is also expressed as `examples/saas_startup` (one instance of this system).
 
 ## Assumptions (correct me before planning starts)
 
 1. Greenfield: no implementation exists in this repo yet.
-2. Python 3.12. The core is **non-deterministic by design**: an LLM decides every event an entity produces, inside the simulation loop, so noise and behavior are steered by prompts attached on the dashboard.
-3. For now the output is **JSON tables only**: AccountingBench-style `source_data` tables (bank, card, processor, payroll) emitted as JSON and streamed to the dashboard, which displays them in real time as they are generated.
-4. The world manifest is the single contract between "authoring" and "simulation": a human or an agent can write it, the simulator only reads it.
+2. Python 3.12. The core is **non-deterministic by design**: LLM agents decide every event an entity produces, inside the simulation loop, so noise and behavior are steered by the prompts in the manifest.
+3. LLM inference is unlimited: there is no budget on calls, tokens or concurrency. The design uses more agents, more turns and richer tool use wherever that makes a world more realistic. Wall-clock time is the remaining limit.
+4. For now the output is **JSON tables only**: AccountingBench-style `source_data` tables (bank, card, processor, payroll) written as JSON files as they are generated.
+5. The world manifest is the single contract between "authoring" and "simulation": a human or the narrator tree can write it, the simulator only reads it.
+6. A v1 world centers on one company: the institutions with renderers (Mercury, Stripe, Ramp, Rippling) are the systems that company uses.
 
 ## Objective
 
-Create near-real financial scenarios and situations: many varied, realistic synthetic financial worlds. A world is generated top-down in *intent* but simulated bottom-up in *money movement*:
+Create near-real financial scenarios and situations: many varied, realistic synthetic financial worlds. A world is told top-down as a story and simulated bottom-up as money movement:
 
 ```
-world generator -> entity + relationship generator -> story generator -> noise (at every level)
-        \_______________ authoring agents write ______________/
-                              |
-                        World Manifest ("dashboard": entities, relationships, stories, one-offs, prompts, time range)
-                              |
-                  compiler -> discrete-event engine -> per-institution renderers
-                              |                              |
-                   event log          source_data tables (Penrose-like)
+main prompt
+    |
+root narrator -> child narrators (recursively) -> actors          (authoring: the tree run to day 0)
+    |
+World Manifest (node tree, entities, accounts, relationships, stories, noise, prompts, time range)
+    |
+compiler -> day loop: chapters (reports up, briefs down) + one turn per actor per day
+                |
+     clearinghouse -> per-institution renderers
+                |                      |
+     event log + run log     source_data tables (Penrose-like)
 ```
 
-How a run works: each entity's agent, acting on its own relationships, stories and prompts, decides its events within the time range without seeing the rest of the world. All events go into one shared stream. Each institution (Mercury, Stripe, Ramp, Rippling) takes the events that involve it and writes them as rows in its own JSON tables, and cross-cutting behavior such as settlement delays and payout batching happens there. The dashboard is interactive: edit any prompt, rerun, and the data is recreated.
+How a run works: the world is a tree of agents. The root narrator holds someone's life (in `examples/saas_startup`, the co-founder and CEO's), and each inner node narrates one part of it: the company, a department, a household. The leaves are actors: the people, customers and vendors who move money. Each narrator briefs its children, and siblings never see each other, so they decide independently. Every simulated day each actor takes a turn, using tools to look at its own accounts and inbox, pay, bill, swipe cards and send messages. All events go into one shared stream. Each institution (Mercury, Stripe, Ramp, Rippling) takes the events that involve it and writes them as rows in its own JSON tables, and cross-cutting behavior such as settlement delays and payout batching happens there. Edit any prompt in the manifest, rerun, and the data is recreated.
 
-Users: (a) authors who want a new world by prompt, (b) reviewers who inspect and edit the manifest in a dashboard and rerun the simulation.
+Users: (a) authors who want a new world by prompt, (b) reviewers who inspect and edit the manifest and rerun the simulation.
 
-The product is the **dashboard**. Code builds the skeleton (entity shells, relationship map, time range) and every entity, relationship, story and noise item carries an associated prompt. These prompts are where one-offs live (a late payment, a personal charge, a disputed invoice) and all of them are editable from the dashboard; data is generated from them.
+The narrator tree builds the world on day 0: nodes, entities, accounts, relationships, stories and the time range. Every node, relationship, story and noise item carries a prompt. These prompts are where one-offs live (a late payment, a personal charge, a disputed invoice), and all of them are editable in the manifest; data is generated from them.
 
-The first version generated from the main prompt is plain: it creates what was asked for and nothing more, with no one-offs added on its own. Reviewers then add and edit one-offs in the per-entity prompts and regenerate.
+The first version generated from the main prompt is plain: it creates what was asked for and nothing more, with no one-offs added on its own. Reviewers then add and edit one-offs in the per-node prompts and regenerate.
 
 Success looks like: a reviewer types a one-paragraph prompt, reviews a generated manifest, runs the simulator, and gets institution tables with realistic friction (settlement lags, batched payouts, messy descriptors, personal commingling) plus an event log that explains where every row came from.
 
 ## Tech Stack
 
-- Python 3.12, `pydantic` v2 (manifest + event models), `PyYAML`, `typer` (CLI); LLM calls (authoring agents and every run-time decision) go through the `Llm` interface, whose only implementation for now is `ClaudeCodeLlm` (one file in `worldgen/llm/`), which calls the locally installed Claude Code in headless mode (`claude -p`) and so runs on the user's Claude subscription. No API key and no `anthropic` SDK dependency yet
-- JSON tables as the only output format; a streaming channel (e.g. server-sent events or websocket) pushes rows to the dashboard as they are generated
+- Python 3.12, `pydantic` v2 (manifest + event models), `PyYAML`, `typer` (CLI)
+- LLM calls go through the `Llm` interface, whose implementation is `AnthropicLlm` (`worldgen/llm/anthropic_llm.py`) on the Anthropic Python SDK (`anthropic`, async client). The model and effort level are set in world config (default model `claude-opus-5-5`). Credentials come from the environment (`ANTHROPIC_API_KEY` or an `ant auth login` profile)
+- JSON tables as the only output format, written as rows are generated
 - `pytest`, `hypothesis` (property tests), `ruff`, `mypy --strict`
 - Money is `decimal.Decimal` everywhere; never `float`. Dates are `datetime.date`; engine time is integer day index from `start_date`.
 
@@ -48,42 +54,47 @@ Install:   uv sync
 Test:      uv run pytest -q --cov=worldgen --cov-fail-under=90
 Lint:      uv run ruff check . && uv run ruff format --check .
 Types:     uv run mypy --strict worldgen
-Author:    uv run worldgen author --prompt "B2B SaaS, 18 months, 5 staff" --out worlds/demo/manifest.yaml
+Author:    uv run worldgen author --prompt "B2B SaaS, 18 months, 5 staff" --out worlds/demo/manifest.yaml   # runs the narrator tree to day 0
 Validate:  uv run worldgen validate worlds/demo/manifest.yaml
 Simulate:  uv run worldgen simulate worlds/demo/manifest.yaml     # new run in worlds/demo/runs/<run_id>/: <institution>/<table>.json + log.jsonl
-Runs:      uv run worldgen runs list|show|tail worlds/demo   # run history; `tail` follows a live run's log
-Verify:    uv run worldgen verify worlds/demo/runs/<run_id>        # ledger invariants + every row traces to an event
-Dashboard: uv run worldgen dashboard worlds/demo/manifest.yaml   # edit prompts, run/rerun the simulation, live JSON table view
+Runs:      uv run worldgen runs list|show|tail|cancel worlds/demo   # run history; `tail` follows a live run's log
+Verify:    uv run worldgen verify worlds/demo/runs/<run_id>        # ledger invariants, tree rules, every row traces to an event
 ```
 
 ## Project Structure
 
-Convention: one file per agent, tool, template, story op, institution mechanic, renderer, booking rule and validator.
+Convention: one file per role, tool, template, op, institution mechanic, renderer, booking rule and validator.
 
 ```
 worldgen/
-  manifest/        -> pydantic models: World, Entity, Relationship, Story, Noise, TimeRange
-  authoring/
-    agents/        -> world_agent.py, entity_agent.py, relationship_agent.py, story_agent.py, noise_agent.py
-    tools/         -> one file per tool the agents may call
-    templates/     -> prompt templates (one per agent)
+  manifest/        -> pydantic models: World, Node, Entity, Account, Access, Relationship, Story, Noise, TimeRange
+  tree/
+    nodes.py       -> the node tree: parent, children, role, and the entity each node stands for
+    spawn.py       -> adds and retires nodes, on day 0 and during a run
+    briefs.py      -> builds a node's brief for a turn: prompt, chapter brief, noise in scope, today's items
+    chapters.py    -> chapter boundaries: reports up the tree, then briefs down, one level at a time
+  agents/
+    loop.py        -> AgentLoop: one turn of one node, a tool-use loop the engine owns
+    roles/         -> narrator.py, actor.py, staff.py: the tool set for each role
+    templates/     -> system prompt templates (one per role)
+  tools/           -> one file per tool that is not an op, grouped as read/, talk/, tree/, self/, staff/
   compiler/        -> manifest -> obligation schedule (resolves refs, expands relationship terms into dated obligations)
   engine/
     clock.py       -> day tick, business-day calendar, holidays
     rng.py         -> Rng: the injected source of randomness for coded mechanics
-    agents/        -> agent state, wake-up triggers, action validation, one file per trigger
-    obligations.py -> open obligations per agent; asks again, then logs, any left unanswered
-    cohorts.py     -> expands a cohort's bulk answer into one event per member
+    day.py         -> one simulated day: chapter step, parallel turns, day close
+    obligations.py -> open obligations per handler; asks again, then logs, any left unanswered
+    inbox.py       -> messages between nodes, delivered the next day
     revisions.py   -> prompt revision history
     clearinghouse.py -> in-flight ACH/wire/card queue with settlement delays
-    ops/           -> one file per story operation (invoice, refund, payroll_run, card_swipe, ...)
+    ops/           -> one file per op (pay, invoice, card_swipe, refund, transfer_own, payroll_run, ...); each op is also the act tool the model calls
   institutions/    -> one renderer per institution: mercury.py, stripe.py, ramp.py, rippling.py; descriptors.py (merchant descriptor per row)
   events/          -> event schema + event log writer
   booking/         -> one file per booking rule (derived books, post-v1 policy variants)
-  validators/      -> one file per invariant (conservation, isolation, schema)
-  llm/             -> base.py (Llm interface), claude_code.py (ClaudeCodeLlm, headless `claude -p`), fake.py (test double)
-  sinks/           -> json_files.py, live_stream.py, run_log.py (append-only log.jsonl writer; live_stream tails it)
-  runs/            -> run_id.py, run_meta.py, run_store.py (list/open), one file per log entry kind
+  validators/      -> one file per invariant (conservation, isolation, schema, tree)
+  llm/             -> base.py (Llm interface), anthropic_llm.py (AnthropicLlm), fake.py (test double)
+  sinks/           -> json_files.py, run_log.py (append-only log.jsonl writer)
+  runs/            -> run_id.py, run_meta.py, run_store.py (list/open/tail), one file per log entry kind
   cli.py
 examples/saas_startup/   -> TARGET_EXAMPLE expressed as a manifest
 tests/                    -> mirrors worldgen/ layout
@@ -94,29 +105,46 @@ docs/                     -> manifest reference, adding-an-institution guide
 
 | Concept | Definition |
 |---|---|
-| **Entity** | Isolated actor with its own state and clock: customer, vendor, person, institution, (later) tax jurisdiction. Authoring generates entities as mostly empty shells (id, kind, a few fields) that carry a `prompt` by default; the prompt, not coded fields, is what drives the data later generated for that entity. Writes only to its own tables. |
-| **Relationship** | An edge between entities (customer-of, employed-by, banks-with, ...). Carries a `prompt` (e.g. "annual prepay, disputes invoices") and optional terms: amount, schedule, payment channel. This is where recurring obligations such as subscriptions, prepays and rent live. The compiler turns terms into dated obligations, and the agent that owes or bills each one decides what actually happens. Terms may be fixed or left to the prompt, so amounts and timing can be non-deterministic. The set of relationships is the map of the world, and the main structure the code owns. |
-| **Obligation** | A dated item an entity owes or bills under a relationship's terms (rent due on the 1st, a renewal on the 14th, payroll on the 10th). It wakes the agent that owes or bills it, and that agent's answer produces the events (see Simulation Model). |
-| **Story** | Time-ordered causal chain of ops (e.g. "CEO NYC trip closes Contoso expansion") that triggers money movement through relationships and channels. |
-| **Noise / one-off** | A free-text prompt attached at any level (world, entity, relationship, story, single op) and added to the brief of every agent in its scope, which acts on it when deciding events: blank or terse memos, duplicate charges, refunds, late or short payments, personal commingling. Institution-side messiness comes from institution mechanics and situations: each merchant's statement name is rendered from its `descriptors` (variants written by the authoring LLM), and posting lags come from the clearinghouse. |
-| **Op** | Atomic engine action emitting zero or more events, e.g. `card_swipe`, `stripe_charge`, `payout_batch`, `ach_pull`. |
-| **Event** | Immutable record: `id, day, op, source_entity, dest_entity, amount, cause` (`cause` is a short plain-text summary of why it happened, e.g. "Contoso annual prepay due under r_contoso"). Every rendered row traces back to events. |
+| **Node** | An agent in the world's tree, with its own prompt, state and memory. Each node has one role. **Narrators** (the root and every inner node) tell one part of the story: they brief their children, read their reports, and add or retire children. They never move money. **Actors** (the leaves) are people, customers and vendors, and move money only through op tools. **Staff** nodes sit outside the tree, one per institution, and decide situations on top of that institution's coded mechanics. A node may stand for an entity (Alex's leaf stands for `p_ceo`) or for a part of the story (the sales department). |
+| **Entity** | A party in the world: company, person, customer, vendor, institution, catalog merchant, (later) tax jurisdiction. It holds accounts and is a party to relationships. Entities are shells (id, kind, name, a few fields such as `descriptors`); behavior comes from the prompts of the nodes that act for them. A catalog merchant has no node and never acts. |
+| **Account** | Money an entity holds: checking, treasury, card, processor balance, payroll. Accounts at institutions with a renderer produce rows. All other accounts (a customer's own bank, the CEO's personal bank) are tracked for balances and conservation but not rendered. Money from outside the world enters and leaves through the `world_boundary` account. |
+| **Access** | A grant that lets an actor use an account in named ways: cardholder, wire and ACH signer, payroll admin. An actor uses its own entity's accounts, and other entities' accounts only through access (the ops manager pays rent from the company's checking account; the CEO swipes a company Ramp card). |
+| **Relationship** | An edge between entities (customer-of, employed-by, leases-from, ...). Carries a `prompt` (e.g. "annual prepay, disputes invoices"), optional terms (amount, schedule, payment channel) and a handler for each party: the actor that bills or pays under it. This is where recurring obligations such as subscriptions, prepays and rent live. The compiler turns terms into dated obligations, and the handler of each one decides what actually happens. Terms may be fixed or left to the prompt, so amounts and timing can be non-deterministic. A relationship is written by the lowest narrator whose subtree holds a node for every party that is not an institution. The set of relationships is the map of the world, and the main structure the code owns. |
+| **Obligation** | A dated item a handler owes or bills, under a relationship's terms (rent due on the 1st, a renewal on the 14th, payroll on the 10th) or under an invoice it received. It appears in the handler's brief on its due day, and the handler's answer produces the events (see Simulation Model). |
+| **Chapter** | The narrators' unit of time, with its length set in world config (default one calendar month). At each chapter boundary, reports go up the tree and new briefs come down. |
+| **Brief** | What a narrator tells a child for a chapter: plans, intent and context for its part of the story ("you fly to New York March 11-14 to close the Contoso expansion"). A node's prompt is who it is; its brief is what is going on. |
+| **Message** | Text one node sends another: an invoice notice, a dunning email, a dispute, "can we split this payment". Delivered to the recipient's inbox the next day. An actor can message the handlers on the other side of the relationships it handles, and anyone who has messaged it. |
+| **Story** | A time-ordered causal chain of steps (e.g. "CEO NYC trip closes Contoso expansion"), written by a narrator or a reviewer. Each step names an actor in the writer's subtree, a day and an intent, optionally with a merchant and amount, and appears in that actor's brief on its day. The actor decides the events. |
+| **Noise / one-off** | A free-text prompt attached to a node, relationship, story or single step, and added to the brief of every agent in its scope (a node's scope is its subtree). Agents act on it when deciding events: blank or terse memos, duplicate charges, refunds, late or short payments, personal commingling. Institution-side messiness comes from institution mechanics and staff situations: each merchant's statement name is rendered from its `descriptors` (variants written by the narrator that creates the merchant), and posting lags come from the clearinghouse. |
+| **Op** | Atomic engine action emitting zero or more events, e.g. `card_swipe`, `stripe_charge`, `payout_batch`, `ach_pull`. The ops an actor may take are offered to it as act tools. |
+| **Event** | Immutable record: `id, day, op, source_account, dest_account, amount, cause, turn` (`cause` is a short plain-text summary of why it happened, e.g. "Contoso annual prepay due under r_contoso"; `turn` is the agent turn that produced it). Every rendered row traces back to events. |
 
 ## Simulation Model
 
 Decisions are made while the clock runs, not planned up front.
 
-- **Agents:** every entity runs as an agent. It holds its prompt and its own state: balances, open obligations, recent events and a short rolling memory summary. It sees only its own information, never the rest of the world.
-- **Wake-up triggers:** an agent is consulted by the LLM only when triggered, to keep calls sparse. Triggers are an incoming event (an invoice arrives), an obligation falling due, a timer the agent set for itself, a low-probability random drift tick (mostly for people), and a balance crossing a threshold.
+- **Day 0 (authoring):** the root narrator reads the main prompt and spawns its children, which spawn theirs, down to the actors. Narrators create entities, accounts, access grants, relationships, merchant descriptors and stories with tree tools, and write each child's first brief. The result is saved as the manifest, which a reviewer can edit before the run.
+- **A growing tree:** during a run, narrators add and retire nodes as the story needs (a hire, a new customer, a dropped vendor), with the entities, accounts and access that come with them. Each change is logged with the narrator that made it.
+- **Chapters:** on the last day of a chapter, each actor's brief asks for a report, which it gives with `report_up`. Narrators then read their children's reports and report to their own parent, one level at a time up to the root. From the root down, each narrator writes the next chapter's brief for each child and adds or retires children. Narrators at the same level work in parallel. A narrator sees its own prompt and brief, its children's prompts and reports, and its own past chapters.
+- **Turns:** every simulated day, every actor and every staff node takes one turn, all in parallel. A turn starts from the node's brief: its prompt (current revision), its chapter brief, noise in scope, and today's items (obligations due, story steps, new messages, timers firing, balance changes). The node then calls tools until it is done. "Nothing today" is a normal turn, and most days are ordinary.
+- **Agent loop:** each turn is a tool-use loop owned by the engine (`agents/loop.py`). The engine sends the role's system prompt, the node's tools and its brief, executes every tool call in each response (results for parallel calls go back together), and continues until the model replies without calling a tool or the turn reaches `max_tool_calls_per_turn` (world config). Each turn is a fresh conversation: what a node remembers between turns lives in its notes and history, reached through tools. Each role's system prompt and tool list are byte-identical across turns and come before the brief, so they are served from the prompt cache.
+- **Tools by role:**
+
+  | Role | Read | Act | Other |
+  |---|---|---|---|
+  | Narrator | `children_reports`, `my_chapters` | none | `spawn_child`, `retire_child`, `brief_child`, `create_entity`, `open_account`, `grant_access`, `write_relationship`, `write_story`, `report_up` |
+  | Actor | `my_balances`, `my_statement`, `my_inbox`, `my_obligations`, `search_my_history`, `merchant_catalog` | one tool per op: `pay`, `invoice`, `card_swipe`, `refund`, `transfer_own`, `answer_obligation`, ... | `send_message`, `set_timer`, `note_to_self`, `add_quirk`, `report_up` |
+  | Staff | the accounts its institution holds | `hold_payout`, `release_payout`, `return_wire`, `flag_review`, ... | `send_message` |
+
 - **LLM decides every event:** the LLM decides every event an entity produces; paying rent on time is a decision just like paying it late. Most answers are "as agreed", so a world stays mostly ordinary, but recurring flows drift the way real ones do (rent paid on the 3rd one month, a vendor raising its price, payroll changing after a hire).
-- **Obligations:** when obligations fall due, the agent is woken with a brief listing each open one and must answer every item (pay, pay late, short-pay, skip, dispute, cancel, change), each with a `cause`. If an answer leaves an item out, the engine asks once more for just the missing items, then logs `obligation_unanswered` and renders nothing for it.
-- **Cohorts:** a large group of similar entities (the self-serve subscribers) runs as one agent that answers in bulk, e.g. "all 212 renew except these 7: 3 churn, 2 cards fail, 1 downgrades, 1 disputes". The LLM decides; the engine expands the answer into one event per member.
-- **Institution mechanics are coded:** the LLM decides what entities do; code decides how institutions record it. Fees, payout batching, settlement timing, statements, autopay pulls and interest are coded institution mechanics. An institution's agent can still decide situations on top of them (hold a payout for review, return a wire), validated like any other action.
-- **Actions:** the LLM chooses from a fixed menu of ops with arguments. The engine validates every action (the op exists, funds are available, money is conserved) and executes it. The LLM never writes rows. A catalog of realistic merchants and price ranges keeps invented activity plausible.
-- **Reacting to its own finances:** institutions report balances back to the account's owner. Low cash lets an agent move money between its own accounts, delay or cut spending, chase receivables, or raise cash. A payment attempted without funds surfaces as a rejected payment or fee. Customers react the same way (pay late, short-pay, cancel). These feedback loops are intended, and each decision is logged with its `cause`.
-- **Parallelism:** agents cannot see each other, so all agents active on a simulated day are consulted in parallel. The day closes when all have answered, and the events they produced become visible to others from the next day. Simulated time runs faster than wall-clock time.
-- **Quirks and prompt revisions:** after a run an agent may propose a quirk, which is appended to its prompt as a new revision, visible and editable on the dashboard. Each revision records its text, its author (a user or an agent), the run and time it came from, and can be reverted. Later runs start from the revised prompt, so worlds can grow more eccentric over repeated runs.
-- **Logging:** runs are not reproducible, so every LLM prompt and response is recorded in the event log, along with the prompt revision it was made under. Each run also writes a human-readable run log (see Run history) that is shown live and kept for every run.
+- **Act tools are checked on the spot:** the engine validates every act tool call (the op exists, the actor has access, funds are available, money is conserved) and executes or rejects it inside the turn. The result goes straight back to the model, so a rejected payment can be followed by a transfer from savings and a retry. Tool schemas are strict, and every act tool takes a `cause`. The LLM never writes rows. A catalog of realistic merchants and price ranges (`merchant_catalog`) keeps invented activity plausible. Events produced on a day become visible to other nodes from the next day.
+- **Obligations:** a handler answers every obligation in its brief with `answer_obligation` (pay, pay late, short-pay, skip, dispute, cancel, change) and a `cause`; a paying answer executes the payment op. If a turn ends with an obligation unanswered, the engine continues the turn once with a message listing just the missing items, then logs `obligation_unanswered` and renders nothing for it. An obligation paid late comes back to the handler's brief on the new date.
+- **Messages:** `send_message` is how nodes negotiate, dispute and chase each other. The `invoice` op sends the invoice to the payer's handler as a message and opens an obligation for it.
+- **Institution mechanics are coded:** the LLM decides what entities do; code decides how institutions record it. Fees, payout batching, settlement timing, statements, autopay pulls and interest are coded institution mechanics. An institution's staff node decides situations on top of them (hold a payout for review, return a wire), validated like any other action.
+- **Reacting to its own finances:** institutions report balances to the actors with access to an account (`my_balances`, `my_statement`). Low cash lets an actor move money between accounts it can use, delay or cut spending, chase receivables, or raise cash. A payment attempted without funds surfaces as a rejected payment or fee. Customers react the same way (pay late, short-pay, cancel). These feedback loops are intended, and each decision is logged with its `cause`.
+- **Parallelism:** nodes cannot see each other's state, so all turns on a simulated day run in parallel, as do the narrators at one level of a chapter step. The day closes when every turn has finished: the clearinghouse settles, renderers write rows, and the day's messages and the timers due tomorrow go into tomorrow's briefs.
+- **Quirks and prompt revisions:** an actor may add a quirk with `add_quirk`. It is appended to the actor's prompt as a new revision, applies from its next turn, and can be edited like any other prompt. Each revision records its text, its author (a user or an agent), and the run, day and turn it came from, and can be reverted. Later runs start from the revised prompt, so worlds can grow more eccentric over repeated runs.
+- **Logging:** runs are not reproducible, so every model request and response, and every tool call with its input and result, is recorded in the run's `log.jsonl` together with the prompt revisions and brief in force. The log is shown live and kept for every run (see Run history).
 
 ### Run history (log)
 
@@ -124,53 +152,74 @@ Every run is kept, never overwritten, and is a self-contained snapshot of that s
 
 ```
 worlds/demo/runs/20261028T142201Z-a3f/
-  run.json          -> metadata: start/end time, status (running|paused|done|failed|cancelled), counts, manifest sha256, parent_run (if rerun from another run)
-  manifest.yaml     -> exact copy of the manifest as run (entities, relationships, stories, noise, time range)
-  prompts.json      -> every prompt in force at start, keyed by owner (main, entity, relationship, story, noise), each with its revision id, text and author
-  prompt_revisions.json -> revisions added during the run (agent quirks), with the day and decision that produced them
-  log.jsonl         -> append-only, one JSON object per line, in the order things happened (includes full LLM prompts and responses)
+  run.json          -> metadata: start/end time, status (running|done|failed|cancelled), counts, manifest sha256, parent_run (if rerun from another run)
+  manifest.yaml     -> exact copy of the manifest as run (node tree, entities, accounts, relationships, stories, noise, time range)
+  prompts.json      -> every prompt in force at start, keyed by owner (node, relationship, story, noise), each with its revision id, text and author
+  prompt_revisions.json -> revisions added during the run (agent quirks), with the day and turn that produced them
+  log.jsonl         -> append-only, one JSON object per line, in the order things happened (includes every model request, response and tool call)
   events.jsonl      -> events for this run
   mercury/*.json  stripe/*.json  ramp/*.json  rippling/*.json
 ```
 
-- **Snapshot rule:** a run directory is never edited after it finishes and never refers to files outside itself (no pointers to the live manifest or current prompts). Editing the world afterward changes nothing in past runs. Opening a run shows the prompts, manifest, decisions and tables exactly as they were.
-- **Rerun:** rerunning with the same initial prompts creates a new sibling run directory with its own manifest copy, prompts, log and tables. Because the core is non-deterministic, the two snapshots may differ, and the dashboard can compare them. Rerunning from an old run ("restore and run") loads that run's `manifest.yaml` and `prompts.json` as the starting point, and records it as `parent_run`.
+- **Snapshot rule:** a run directory is never edited after it finishes and never refers to files outside itself (no pointers to the live manifest or current prompts). Editing the world afterward changes nothing in past runs. Opening a run shows the prompts, manifest, tree, decisions and tables exactly as they were.
+- **Rerun:** rerunning with the same initial prompts creates a new sibling run directory with its own manifest copy, prompts, log and tables. Because the core is non-deterministic, the two snapshots may differ. Rerunning from an old run ("restore and run") loads that run's `manifest.yaml` and `prompts.json` as the starting point, and records it as `parent_run`.
+- **Log entries:** `{seq, ts, day, kind, ...}` where `kind` is one of:
+  - run: `run_started`, `day_closed`, `run_finished`
+  - tree: `chapter_started`, `report_written` (node, parent), `brief_written` (narrator, child, chapter), `node_spawned` / `node_retired` (narrator, node)
+  - turns: `turn_started` / `turn_finished` (node), `llm_call` (node, turn, request, response, prompt revision ids), `tool_call` (node, turn, tool, input, result), `action_rejected` (node, turn, tool, reason), `message_sent` (from, to, message id), `obligation_unanswered` (obligation id, handler), `quirk_added`
+  - money: `event`, `row_rendered` (institution, table, row id, linked event ids)
 
-- **Log entries:** `{seq, ts, day, kind, ...}` where `kind` is `run_started`, `day_closed`, `event`, `llm_decision` (prompt, response, prompt revision, `cause`), `action_rejected`, `obligation_unanswered` (obligation id, agent), `quirk_added`, `row_rendered` (institution, table, row id, linked event ids), `run_paused` / `run_resumed` (reason: rate limit or call cap) or `run_finished`. The log is the run's narrative; the event log (`events.jsonl`) remains the source of truth for money, and `log.jsonl` references it by event id rather than duplicating amounts.
-- **Written as it happens:** the engine appends each entry and flushes it as soon as it occurs (including on crash, so a failed run keeps a partial log and `status: failed`). The live stream sends exactly the entries being written, so the file and the dashboard can never disagree.
-- **Displayed live:** the dashboard has a run log panel that tails the active run, newest at the bottom, with the simulated day on each line. It filters by kind, entity and institution, and "deviations only". Clicking an entry opens the same detail as the calendar (prompt and response, linked rows).
-- **History:** a run list shows every past run (time, status, prompt revisions, row and deviation counts). Opening one replays its log in the same panel at any speed, and two runs can be opened side by side to compare the days where they diverge. Deleting a run removes its directory.
-- **Retention:** no pruning for now. Runs are never deleted automatically and there is no prune command; `log.jsonl` is plain text and may grow large, which is accepted.
-
-### Dashboard tracking
-
-- **Calendar:** each simulated day shows its events, LLM decisions (with `cause`), quirks added or triggered, and the rows that landed in each institution's table. Opening a decision shows the prompt and response.
-- **Zoom levels and filters:** a month grid shaded by activity, a day view with the full list, filters by entity or institution, and a "deviations only" filter showing days where an LLM changed something.
-- **Prompt history:** every prompt has a revision list. Decisions link to the revision they were made under, so a deviation can be traced to a user edit or an agent-added quirk.
+  The log is the run's narrative; the event log (`events.jsonl`) remains the source of truth for money, and `log.jsonl` references it by event id rather than duplicating amounts.
+- **Written as it happens:** the engine appends each entry and flushes it as soon as it occurs (including on crash, so a failed run keeps a partial log and `status: failed`).
+- **Followed live:** `worldgen runs tail` prints the active run's log as it is written, newest at the bottom, with the simulated day on each line. It filters by kind, node, entity and institution, and deviations only.
+- **History:** `worldgen runs list` shows every past run (time, status, prompt revisions, row and deviation counts), and `runs show` opens one from its files. Deleting a run removes its directory.
+- **Retention:** runs are kept until a user deletes them, and there is no prune command; `log.jsonl` is plain text and may grow large, which is accepted.
 
 ## Manifest Shape (excerpt)
 
 ```yaml
 world: {name: demo, start: 2021-01-01, end: 2022-06-30, currency: USD}   # seed: optional, best-effort
+config: {model: claude-opus-5-5, effort: high, chapter: month, max_tool_calls_per_turn: 40}
+nodes:
+  - {id: n_root, role: narrator, prompt: "Alex Rivera's life: co-founder and CEO of a B2B SaaS startup, married, lives in San Francisco"}   # holds the main prompt
+  - {id: n_alex, role: actor, parent: n_root, stands_for: p_ceo, prompt: "pitches investors, travels for big deals, uses the company card for personal things"}
+  - {id: n_company, role: narrator, parent: n_root, stands_for: co_self, prompt: "the startup: 5 staff, $1.5M seed, self-serve and enterprise customers"}
+  - {id: n_sales, role: narrator, parent: n_company, prompt: "enterprise deals and the self-serve tail"}
+  - {id: n_jordan, role: actor, parent: n_sales, stands_for: p_jordan, prompt: "VP of Sales; entertains prospects, extends trips over weekends"}
+  - {id: n_contoso, role: actor, parent: n_sales, stands_for: cust_contoso, prompt: "enterprise buyer, slow approvals, pays by wire"}
+  - {id: n_mercury, role: staff, stands_for: inst_mercury, prompt: "small-business bank; reviews unusually large outgoing wires"}
 entities:
-  - {id: cust_contoso, kind: customer, prompt: "enterprise buyer, slow approvals, pays by wire"}
-  - {id: cohort_selfserve, kind: cohort, member_kind: customer, prompt: "self-serve monthly plans ($25-$270) paid by card through Stripe; grows steadily; a few churn, fail or dispute each month"}
-  - {id: v_amazon, kind: vendor, prompt: "equipment and supplies, bought on Ramp cards", descriptors: ["AMZN Mktp US*{ref}", "Amazon.com*{ref}", "AMZN MKTP US"]}   # written by the authoring LLM; {ref} becomes a random reference code
+  - {id: co_self, kind: company}
+  - {id: p_ceo, kind: person, name: Alex Rivera}
+  - {id: p_jordan, kind: person, name: Jordan Taylor}
+  - {id: cust_contoso, kind: customer, name: Contoso}
+  - {id: v_amazon, kind: vendor, descriptors: ["AMZN Mktp US*{ref}", "Amazon.com*{ref}", "AMZN MKTP US"]}   # catalog merchant with no node; {ref} becomes a random reference code
   - {id: inst_mercury, kind: institution, institution: mercury}
+  - {id: inst_ramp, kind: institution, institution: ramp}
+accounts:
+  - {id: a_x0666, holder: co_self, at: inst_mercury, kind: checking, name: "Mercury Checking X0666", opening: "0.00"}
+  - {id: a_ramp_alex, holder: co_self, at: inst_ramp, kind: card, name: "Ramp card - Alex Rivera", limit: "25000.00"}
+  - {id: a_contoso_bank, holder: cust_contoso, kind: checking, opening: "2000000.00"}   # no `at`: tracked, not rendered
+access:
+  - {node: n_alex, account: a_x0666, can: [wire, ach]}
+  - {node: n_alex, account: a_ramp_alex, can: [card]}
 relationships:
   - id: r_contoso
     parties: [cust_contoso, co_self]
     kind: customer_of
+    written_by: n_sales
+    handlers: {co_self: n_jordan}   # cust_contoso's handler defaults to n_contoso, the node that stands for it
     prompt: "annual prepay, expands mid-term after the NYC trip"
-    terms: {type: prepaid_annual, amount: "85363.20", start: 2021-02-01, end: 2021-11-30}   # optional; compiled into dated obligations that cust_contoso's agent answers
+    terms: {type: prepaid_annual, amount: "85363.20", start: 2021-02-01, end: 2021-11-30}   # optional; compiled into dated obligations
     channel: wire
 stories:
   - id: s_nyc_trip
-    ops:
-      - {op: card_swipe, day: 2021-03-11, actor: p_ceo, merchant: DELTA AIR LINES, amount: "642.20"}
+    written_by: n_root
+    steps:
+      - {day: 2021-03-11, actor: n_alex, intent: "fly to New York for the Contoso meeting", merchant: DELTA AIR LINES, amount: "642.20"}
 noise:
   - {scope: {story: s_nyc_trip}, prompt: "leaves memos blank on the personal weekend charges"}
-  - {scope: {entity: cust_contoso}, prompt: "pays late and short-pays once, then sends a corrective wire"}
+  - {scope: {node: n_contoso}, prompt: "pays late and short-pays once, then sends a corrective wire"}
 ```
 
 ## Code Style
@@ -194,40 +243,41 @@ class Descriptors:
         return pattern.replace("{ref}", ref)
 ```
 
-Conventions: `snake_case` files named for the single thing they hold; one public class per file; docstring is one line; randomness through the injected `Rng`, and LLM calls through an injected `Llm` client, never imported directly, so tests can substitute fakes; no module-level state.
+Conventions: `snake_case` files named for the single thing they hold; one public class per file; docstring is one line; randomness through the injected `Rng`, and LLM calls through an injected `Llm` client, never imported directly, so tests can substitute fakes; every tool is a class with a strict JSON input schema and a `run` method that returns what the model sees; no module-level state.
 
 ## Testing Strategy
 
-- **Unit** (`tests/<mirror path>`): every op, institution mechanic, renderer, validator. LLM and `Rng` faked so tests stay stable even though the core is not deterministic.
-- **Property** (`hypothesis`): conservation (sum of events per account = rendered balance), isolation (an institution renderer never imports another's tables), settlement (no row posted before `initiated + min_delay`, none on weekends/holidays unless the channel allows).
+- **Unit** (`tests/<mirror path>`): every op, tool, institution mechanic, renderer, validator. LLM and `Rng` faked so tests stay stable even though the core is not deterministic.
+- **Property** (`hypothesis`): conservation (sum of events per account = rendered balance), isolation (an institution renderer never imports another's tables; a brief or read-tool result never holds another node's state beyond messages sent to it and, for a narrator, its children's prompts and reports), settlement (no row posted before `initiated + min_delay`, none on weekends/holidays unless the channel allows).
 - **Invariants over goldens**: no checksum goldens. `examples/saas_startup` is run and checked for the TARGET_EXAMPLE phenomena and the validators, not for exact rows.
-- **LLM calls** (authoring and run time): mocked with recorded fixtures; tests assert manifests validate, refs resolve and invariants hold, never exact prose. One opt-in live smoke test behind `WORLDGEN_LIVE=1`.
-- **Coverage**: >= 90% lines on `worldgen/`, 100% on `validators/` and `engine/clearinghouse.py`.
+- **LLM calls** (day 0 and run time): mocked with recorded fixtures, each holding a whole turn (every request and response of its tool loop). Tests assert manifests validate, refs resolve and invariants hold, never exact prose. One opt-in live smoke test behind `WORLDGEN_LIVE=1`.
+- **Coverage**: >= 90% lines on `worldgen/`, 100% on `validators/`, `engine/clearinghouse.py` and `agents/loop.py`.
 
 ## Boundaries
 
-- **Always:** use `Decimal` for money; route randomness through `Rng` and LLM calls through `Llm`; log every LLM decision to the event log; validate every agent action against the op menu and available funds; run tests + ruff + mypy before commit; add a validator when adding an invariant; keep one-thing-per-file layout; update `docs/` when the manifest schema changes.
-- **Ask first:** adding runtime dependencies; changing the manifest schema in a breaking way (bump `schema_version`); changing output table schemas; choosing an accounting policy for derived books; any real network call beyond Claude Code's own; adding an API-key-based `Llm` implementation.
-- **Never:** let an LLM write rendered rows without a matching event (money must still be conserved); let one institution renderer read another's tables; use `float` for amounts; hardcode special-case friction (it must emerge from op delays and clearinghouse rules); commit API keys or generated worlds containing real PII.
+- **Always:** use `Decimal` for money; route randomness through `Rng` and LLM calls through `Llm`; log every model call and tool call to the run log; validate every act tool call against the op menu, the actor's access and available funds; run tests + ruff + mypy before commit; add a validator when adding an invariant; keep one-thing-per-file layout; update `docs/` when the manifest schema changes.
+- **Ask first:** adding runtime dependencies; changing the manifest schema in a breaking way (bump `schema_version`); changing output table schemas; choosing an accounting policy for derived books; any network call beyond the model API; adding another `Llm` implementation or model provider.
+- **Never:** let an LLM write rendered rows without a matching event (money must still be conserved); let one institution renderer read another's tables; give a node a brief or tool that shows another node's state; use `float` for amounts; hardcode special-case friction (it must emerge from op delays and clearinghouse rules); commit API keys or generated worlds containing real PII.
 
 ## Success Criteria
 
-1. `worldgen validate` rejects manifests with dangling refs, ops outside the time range, or unknown op types, each with a pointing error message.
+1. `worldgen validate` rejects manifests with dangling refs (nodes, entities, accounts, access, handlers), a node tree with a cycle or more than one root, story steps outside the time range, or unknown op types, each with a pointing error message.
 2. `examples/saas_startup` reproduces every phenomenon in TARGET_EXAMPLE section 6 (in-transit month-end Stripe payout, many-to-one payout batching, enterprise prepay vs delivery, exec commingling, Ramp swipe-to-settle cutoff lag), asserted by tests that query the output tables.
 3. Variation without breakage: two runs of the same manifest may differ, but every run passes conservation and event-link checks (criteria 4 and 5).
-4. Conservation: for every institution account, opening balance + sum(rendered rows) = closing balance; sum of cash events across the world = 0 (outside the world boundary account).
+4. Conservation: for every account, opening balance + sum of its events = closing balance, and for every rendered account the rendered rows give the same closing balance; the sum of all events across the world is 0, counting the `world_boundary` account.
 5. Event links: 100% of rendered rows link to at least one event; `worldgen verify` reports 0 orphans.
-6. Noise is traceable: every `llm_decision` records the noise prompts in its brief (by revision id), and the dashboard lists, for any noise prompt, the rows it touched. Noise is checked by the invariants.
-7. `worldgen author` turns a one-paragraph prompt into a manifest that passes `validate` on >= 90% of 20 fixture prompts (mocked-LLM replay), producing an interactive dashboard that lists entities, relationships, stories, noise, prompts and time range. Editing any prompt and pressing run regenerates the JSON tables, shown live as they are produced.
+6. Noise is traceable: every turn records the noise prompts in its brief (by revision id), so the rows any noise prompt touched can be listed from the run's files. Noise is checked by the invariants.
+7. `worldgen author` turns a one-paragraph prompt into a day-0 tree whose manifest passes `validate` on >= 90% of 20 fixture prompts (mocked-LLM replay). Editing any prompt in the manifest and running `simulate` regenerates the JSON tables.
 8. A new institution can be added by creating one renderer file and one test file, with no edits to engine core (demonstrated by a toy `plaid` renderer in the docs guide).
-9. Rows start streaming to the dashboard as soon as a run starts, and a run stays within its configured LLM limits (`max_llm_calls` and `max_concurrent_llm_calls` per run, defaults set in the world config). Since nothing happens without the LLM, hitting a limit pauses the run instead of failing it: on the subscription rate limit it logs `run_paused`, sets `status: paused` and resumes when the limit resets; on `max_llm_calls` it stays paused until the cap is raised on the dashboard or the run is cancelled. The simulated clock does not advance while paused.
-10. Every agent action is validated: an action outside the op menu or beyond available funds is rejected and logged, never rendered.
-11. Run history: every run creates `runs/<run_id>/` with `run.json` and an append-only `log.jsonl`; rerunning never overwrites an earlier run. Every `row_rendered` entry matches a row in that run's tables and every `event` entry matches an event, and vice versa (tested). Entries reach the dashboard as they are appended, a killed run leaves a readable partial log with `status: failed`, and a past run can be reopened and replayed from its files alone. Each run directory contains its own `manifest.yaml` and `prompts.json`; editing the live manifest or prompts afterward leaves earlier run directories byte-identical (tested), and two runs started from the same initial prompts produce two separate snapshot directories.
-12. Every obligation is answered: each obligation due within a run has either an `llm_decision` answering it or an `obligation_unanswered` entry, and no event pays an obligation without such a decision (tested).
+9. Rows are written to the tables as they are produced, from the first simulated day. Transient model API errors are retried with backoff and never fail a run on their own. No turn makes more than `max_tool_calls_per_turn` tool calls. A run can be cancelled from the CLI, which ends it with `status: cancelled` and a readable log.
+10. Every act tool call is validated: a call outside the op menu, without access or beyond available funds is rejected, its reason is returned to the agent in the same turn and logged as `action_rejected`, and nothing is rendered for it.
+11. Run history: every run creates `runs/<run_id>/` with `run.json` and an append-only `log.jsonl`; rerunning never overwrites an earlier run. Every `row_rendered` entry matches a row in that run's tables and every `event` entry matches an event, and vice versa (tested). `runs tail` shows entries as they are appended, a killed run leaves a readable partial log with `status: failed`, and a past run can be reopened and replayed from its files alone. Each run directory contains its own `manifest.yaml` and `prompts.json`; editing the live manifest or prompts afterward leaves earlier run directories byte-identical (tested), and two runs started from the same initial prompts produce two separate snapshot directories.
+12. Every obligation is answered: each obligation due within a run has either an `answer_obligation` tool call or an `obligation_unanswered` entry, and no event pays an obligation without such a call (tested).
+13. Isolation: no brief or tool result shows a node another node's state, except messages sent to it and, for a narrator, its children's prompts and reports (tested on every brief and tool result of an `examples/saas_startup` run).
+14. Tree rules: every node except the root has exactly one parent; every node added during a run has a `node_spawned` entry naming the narrator that added it; every relationship and story was written by a narrator whose subtree holds the nodes it names (checked by `worldgen verify`).
 
 ## Open Questions
 
-1. **LLM provider and budget:** resolved for now: Claude only, run on the Claude subscription through headless Claude Code (`ClaudeCodeLlm`), so there is no per-token cost, but usage is bounded by subscription rate limits. Controlled by per-run `max_llm_calls` and `max_concurrent_llm_calls` (see Success Criteria 9). Remaining questions: sensible default values for those caps, and whether headless Claude Code on a subscription is allowed and fast enough for many parallel calls per simulated day. Check this first: every event needs an LLM call, so nothing moves without it. If not, add an API-key `Llm` implementation behind the same interface.
-2. **LLM or coded:** resolved: the LLM decides every entity event; institution mechanics are coded (see Simulation Model).
-3. **Obligation briefs:** how far ahead an agent's brief looks (whether a vendor that bills monthly is woken once per bill or answers several months at once), and how large a cohort's bulk answer can get before it must be split.
-4. **Run history retention:** resolved as keep every run as a full self-contained snapshot, with LLM prompt/response bodies stored in the run's `log.jsonl` (see Run history). No pruning for now.
+1. **Upcoming obligations:** how far ahead a handler's brief shows obligations that are not yet due, so it can plan for them (a vendor that bills monthly, a large annual renewal).
+2. **Idle turns:** an actor takes a turn every day by default. Should an actor with nothing in its brief (no items, messages or timers) still take one? A daily turn lets people act on a whim; skipping it keeps hundreds of subscribers from each inventing something to do every day, and shortens the wall-clock time of a run.
+3. **Narrator interrupts:** whether an urgent report (cash running out, a lost customer) can wake a narrator before the chapter ends.
