@@ -4,7 +4,9 @@
 
 ## 1. Purpose: this document is the prompt for the world generator
 
-This file describes, in as much detail as possible, the kind of world the generator in `SPEC.md` should be able to create. It is written to be handed to the authoring agents as the main prompt: from it they produce a manifest (entities, relationships, stories, noise, prompts, time range), which the simulator then runs into the `source_data` tables in section 5. It describes the world and the output, not an implementation. How the simulator works is in `SPEC.md`.
+This file describes, in as much detail as possible, the kind of world the generator in `SPEC.md` should be able to create. It is written to be handed to the root narrator as the main prompt: from it the narrator tree produces a manifest (institutions, entities, accounts, relationships, catalog, seed, stories, noise, prompts, time range), which the simulator then runs into the `source_data` tables in section 5. It describes the world and the output, not an implementation. How the simulator works is in `SPEC.md`.
+
+Amounts, names and dates in this document are examples. A generated world matches this one when it shows the same kinds of events and stories (section 6), not the same numbers. Details marked † come from the public [AccountingBench](https://accounting.penrose.com/) page and its transcripts, so a world built from this prompt stays close to the real company's data.
 
 **What AccountingBench-style data is.** The raw exports a small company would have: bank statements, a corporate card, a payment processor, and payroll journal entries. The data is only useful if it has the friction real exports have, so the world must be built from the money's side, not the accounting side:
 
@@ -16,15 +18,27 @@ This file describes, in as much detail as possible, the kind of world the genera
 
 ## 2. The company and the time frame
 
-- **Business:** a B2B SaaS startup, mixing a long tail of self-serve subscribers with a small number of enterprise accounts on annual contracts.
+- **Business:** a Y Combinator-backed† B2B SaaS startup with revenue in the millions of dollars a year†. Most of it comes from enterprise accounts on annual contracts; a long tail of self-serve subscribers adds a few thousand dollars a month through Stripe†.
 - **Time range:** 2021-01-01 to 2022-06-30 (18 months), currency USD.
-- **Opening position:** a `$1,500,000` equity wire into `Mercury Checking X0666` on day one. That account is the operating account everything else settles into.
-- **Headcount:** 5 core staff at the start (section 3.3), growing with a few hires; paid twice a month.
+- **Opening position:** the company already exists on day one (section 2.1). Its seed money sits in Mercury: about `$2,500,000` in `Mercury Treasury` by early 2021†, with `Mercury Checking X0666` as the operating account everything else settles into.
+- **Headcount:** 5 core staff at the start (section 3.3), growing with a few hires; paid twice a month. Gross salaries run about `$25,000` a month in early 2021, with about `$3,200` of employer payroll tax†.
 - **Systems the company uses (the only sources of data):**
-  - **Mercury** bank with three accounts: `Mercury Checking X0666` (operating), `Mercury Checking X3354`, and `Mercury Treasury` (interest-bearing).
+  - **Mercury** bank with three accounts: `Mercury Checking X0666` (operating), `Mercury Checking X3354` (shown as `Mercury Savings X3354` in some places†), and `Mercury Treasury` (interest-bearing).
   - **Stripe** to collect card payments from self-serve customers and enterprise customers who pay by card.
   - **Ramp** corporate cards for staff and subscriptions, with a monthly statement paid by autopay from Mercury X0666.
   - **Rippling** for payroll, exporting journal entries on the 10th and 26th of each month.
+
+### 2.1 History before the start
+
+Like every real business, this one has a past, and the world starts in the middle of it. Write this history into the seed and into each node's prompt:
+
+- The company was founded in mid-2020, went through Y Combinator†, and raised a seed round of a few million dollars by equity wire into Mercury X0666. On `2020-12-31` it moved `$2,000,000` of it into Mercury Treasury†.
+- Payroll has run on the 10th and 26th since late June 2020, so Rippling's journal numbers are already in the teens (`JE #18` falls on `2021-03-10`).
+- Dozens of self-serve subscribers have been paying for months, with cards on file at Stripe. Each customer's invoice numbers continue their sequence (`#FF308C68-0007` in February 2021).
+- Contoso prepaid its first annual contract (`2020-12-01` to `2021-11-30`) by wire in December 2020.
+- Vendors already bill their stored Ramp cards and authorized Mercury debits, and the office lease and the corporate counsel relationship are running.
+- On `2021-01-01` money is still moving: a Stripe payout sent on December 30 is in transit, Ramp's December statement awaits its autopay, card swipes from December 30-31 have not settled, and counsel's December Net-30 invoice is unpaid.
+- The five people have held their roles, cards and habits for months.
 
 ## 3. The cast: entities to create
 
@@ -32,17 +46,17 @@ Create each as an entity with its own prompt. Give every entity an id, kind and 
 
 ### 3.1 Customers
 
-- **Self-serve subscribers (hundreds over the period):** monthly plans at `$25`, `$37`, `$39`, `$80`, `$139` or `$270`, paid by card through Stripe. Each has a signup date, a renewal day, and a small chance of churn, refund or dispute. Create them as a cohort that grows over the period rather than as hundreds of hand-written prompts.
-- **Enterprise buyers (a handful):** annual prepaid contracts paid by wire or ACH straight into Mercury, not Stripe. The anchor example is `Contoso`: `$85,363.20` per year, contract `2021-02-01` to `2021-11-30`, paid up front, with an expansion after the CEO's New York trip in March 2021. Enterprise buyers approve slowly and may pay late or short-pay.
+- **Self-serve subscribers (dozens at a time, a few hundred over the period):** monthly plans at `$25`, `$37`, `$39`, `$80`, `$139` or `$270`†, paid by a card kept on file at Stripe, which charges it on the renewal day. Each has a signup date, a renewal day, and a small chance of churn, refund or dispute. Most renewals are paid the day they are invoiced; some are paid a day or more later after a failed attempt, and a few amounts match no plan price because of a discount or proration (a `$30.00` payment†). Each subscriber is its own actor with a short prompt: create them many at a time, starting with the base that already exists (section 2.1) and adding signups through the period.
+- **Enterprise buyers (a dozen or so, most of the revenue):** annual prepaid contracts paid by wire or ACH straight into Mercury, not Stripe. The anchor example is `Contoso`: `$85,363.20` per year†, contract `2020-12-01` to `2021-11-30`, paid up front (section 2.1), with an expansion after the CEO's New York trip in March 2021 and a renewal in December 2021. Enterprise buyers approve slowly and may pay late or short-pay.
 - **Refunds and disputes:** a small share of charges are refunded or disputed days or weeks after payment, as full or partial refunds through Stripe.
 
 ### 3.2 Vendors
 
-- **Cloud and compute:** `VERCEL INC - Monthly Pro Plan` (`$20.00`/month), `AMAZON WEB SERVICES` (variable usage), `RUNPOD.IO` (irregular GPU bursts).
-- **Marketing and ads:** `Facebook Ads` (billed when a `$400.00` threshold is reached), `LinkedIn` (campaigns around `$281.46`), `GOOGLE ADS`.
+- **Cloud and compute:** `VERCEL INC - Monthly Pro Plan` (`$20.00`/month†), `AMAZON WEB SERVICES` (billed monthly for the compute the team actually used), `RUNPOD.IO` (GPU bursts bought when Sam runs experiments).
+- **Marketing and ads:** `Facebook Ads` (billed `$400.00`† each time accumulated ad spend reaches that threshold), `LinkedIn` (campaigns around `$281.46`†), `GOOGLE ADS`.
 - **SaaS tools:** `FIGMA`, `NOTION LABS`, `SLACK TECHNOLOGIES`, `LINEAR`, `GITHUB`, `GWORKSPACE`, mostly billed to a Ramp card monthly or annually.
-- **Facilities, legal and operations:** a commercial landlord (`$7,000.00` rent per month by ACH or wire from Mercury), corporate counsel (quarterly retainer or Net-30 invoices), and `Amazon` (`AMZN MKTP US`) for equipment and supplies.
-- Vendors bill one of three ways: a stored Ramp card, an authorized ACH debit from Mercury, or an invoice paid up to 30 days later.
+- **Facilities, legal and operations:** a commercial landlord (`$7,000.00` rent per month by ACH or wire from Mercury), corporate counsel (quarterly retainer or Net-30 invoices), and `Amazon` (`AMZN MKTP US`) for equipment and supplies (a `$397.53` order†).
+- Vendors bill one of three ways: a stored Ramp card, an authorized ACH debit from Mercury, or an invoice paid up to 30 days later. Usage-billed vendors bill from what the team used, so their bills follow its activity.
 
 ### 3.3 People
 
@@ -56,16 +70,17 @@ Five core people, each with a role, a Ramp card (some with Mercury access) and h
 | **Casey Patel** | Senior Engineer (virtual Ramp card) | Renews GitHub/Linear seats, buys monitor cables, orders team lunch at sprint planning | Clean card use; sometimes forgets receipts or writes terse memos ("cables") |
 | **Morgan Lee** | Ops and Office Manager (Ramp card, vendor billing) | Pays office rent, orders Costco snacks, books Friday happy hours, handles annual insurance prepayments | Accidentally uses a Ramp card stored in a personal Uber Eats profile on a Sunday and adds a memo flagging the mistake |
 
-Memos on Ramp swipes range from clear ("Client dinner with Acme VP"), to terse, to blank, to personal admissions ("Accidentally used company card for personal Uber Eats, please deduct").
+Memos on Ramp swipes range from clear ("Client dinner with Acme VP"), to terse, to blank, to personal admissions ("Accidentally used company card for personal Uber Eats, please deduct"). Many are written days after the swipe, and some never.
 
 ### 3.4 Institutions
 
-These are entities too, and they own the tables in section 5 (each writes only its own).
+These are entities too. Declare each with the payment methods it handles, its mechanics and its tables in section 5. Each writes only its own tables, from events on its own accounts, and has a staff node that decides situations: holding a payout for review, returning a wire, posting a duplicate and reversing it.
 
-- **Stripe:** invoices, card charges, refunds and payouts. Fee is `2.9% + $0.30` per charge. Charges accumulate and are swept into payout batches. If refunds exceed charges, Stripe pulls the difference by ACH from Mercury.
+- **Stripe:** invoices, card charges, refunds and payouts. Fee is `2.9% + $0.30` per charge. Charges become available about two days after they are made and are swept into a payout each business day, so `Deposit - STRIPE` lands in Mercury almost every business day, usually for `$35` to `$500` in early 2021†. If refunds exceed charges, Stripe pulls the difference by ACH from Mercury.
 - **Ramp:** card transactions and monthly statements. Charges settle 1-3 days after the swipe. Statements close at a month-end cutoff and are paid by autopay from Mercury X0666.
-- **Rippling:** payroll journal entries on the 10th and 26th, numbered in sequence (for example `JE #18` on `2021-03-10` and `JE #19` on `2021-03-26`), with matching ACH debits from Mercury for net pay and taxes.
-- **Mercury:** settled bank lines for its three accounts, monthly statements, month-end interest (for example `Interest Accrual` of `$0.82` on checking, larger on Treasury) and service fees. It sees only cash that has settled.
+- **Rippling:** payroll journal entries on the 10th and 26th, numbered in sequence (for example `JE #18` on `2021-03-10` and `JE #19` on `2021-03-26`), with matching ACH debits from Mercury for net pay and taxes. Each line's `account` is the company's own account name as set up in Rippling (`61100 - Salaries`, `61200 - Employer Payroll Tax`, `11100 - Mercury Checking X0666`).
+- **Mercury:** settled bank lines for its three accounts, monthly statements, month-end interest (for example `Interest Accrual` of `$0.82` on checking†; Treasury earns a few hundred dollars a month, such as `$444.98` for January 2021†) and service fees. It sees only cash that has settled.
+- **Merchants:** the catalog merchants people buy from (airlines, restaurants, Amazon, Apple) act through the market: they refund returns, and now and then charge a card twice and reverse it a few days later.
 
 ## 4. Relationships and money flows
 
@@ -73,11 +88,11 @@ The relationships are the map of the world. Create these edges, with a prompt an
 
 | Relationship | Money flow and timing |
 | :--- | :--- |
-| Self-serve customer -> company | Monthly card charge through Stripe on the renewal day; Stripe fee deducted; charges swept into a payout batch; payout lands in Mercury X0666 1-2 business days after it is initiated as `Deposit - STRIPE` |
+| Self-serve customer -> company | Stripe charges the card on file on the renewal day; Stripe fee deducted; charges swept into a payout batch; payout lands in Mercury X0666 1-2 business days after it is initiated as `Deposit - STRIPE` |
 | Enterprise customer -> company | Annual prepay by wire or ACH directly into Mercury, once per contract, for 10-12 months of service |
 | Refunding customer -> Stripe | Refund days or weeks after the charge; net against the next payout, or an ACH pull (`Stripe - Expense - STRIPE`, for example `-$35.39` or `-$282.70`) when refunds exceed charges |
-| Company -> vendor (card) | Ramp swipe on the vendor's schedule; settles 1-3 days later; included in the monthly Ramp statement |
-| Company -> vendor (ACH or invoice) | ACH debit from Mercury, or a Net-30 invoice paid when due |
+| Company -> vendor (card) | The vendor charges a Ramp card kept on file on its schedule; settles 1-3 days later; included in the monthly Ramp statement |
+| Company -> vendor (ACH or invoice) | The vendor pulls an authorized ACH debit from Mercury, or sends a Net-30 invoice the company pays when due |
 | Company -> landlord | `$7,000.00` rent each month by ACH or wire |
 | Employee -> company | Salary on the 10th and 26th through Rippling; ACH debits for net pay and taxes |
 | Person -> Ramp card | Business and personal swipes with memos of varying quality |
@@ -102,7 +117,21 @@ Money movements it causes:
   - `2021-03-14` `THE STANDARD HIGH LINE` `$1,800.00`, memo "4 nights NYC - 2 nights Contoso biz, 2 nights personal weekend"
 - Mercury X0666: `2021-03-16` `ACH Debit - PORSCHE FINANCIAL` `($1,150.00)`
 
-**Default behavior:** on the first generation, create the world plainly: customers, vendors, people, relationships and recurring flows paid as agreed. Personal charges, late or short payments, disputes and trips like the one above are one-offs that reviewers add through the per-entity prompts afterward; the generator does not add them on its own unless the prompt asks.
+**One-offs:** this prompt asks for one-offs like this trip, personal charges, late or short payments and disputes (section 6.1), so the first generation includes them, spread across people and months. Beyond what this prompt asks for, the generator adds nothing on its own; reviewers add more through the per-entity prompts.
+
+### 4.2 More stories
+
+These follow the same shape: a reason, then the money it moves. Use them, and write others like them for other people and months.
+
+- **Parking the seed money (January 2021)†.** After the `$2,000,000` moved into Mercury Treasury on 2020-12-31 (section 2.1), Alex moves `$1,000,000` more on `2021-01-05` and `$785,000` on `2021-01-08`. Money: internal transfers from X0666 to Treasury, and Treasury interest every month from then on.
+- **Refunds outrun charges (February 2021)†.** A handful of subscribers get refunds in a quiet week, Stripe's balance goes negative, and Stripe pulls the difference from Mercury: `Stripe - Expense - STRIPE` of `-$282.70` on `2021-02-05`, and `-$35.39` on `2021-02-23`, the same day a `$489.54` payout lands. Money: Stripe refunds and ACH pulls from X0666 between ordinary payouts.
+- **A hire (spring 2021).** A new engineer joins. Sam buys a laptop at the Apple Store and monitors and cables on Amazon with the company card, Ramp issues the hire a card, GitHub, Linear and Slack bill for more seats from their next cycle, and the hire's first payroll is prorated. Money: a few large equipment swipes, higher SaaS charges, a bigger payroll run.
+- **Training experiment and ad push (summer 2021).** Sam runs a week of GPU experiments, topping up RunPod several times, and the next AWS bill jumps. Marketing runs a campaign the same month: Facebook bills `$400.00` every few days instead of every few weeks, LinkedIn charges for a campaign, and both slow down afterward. Money: bursts of RunPod swipes, a larger AWS charge, clustered threshold bills.
+- **Stripe payouts go weekly.** Partway through the period, Morgan switches Stripe from daily to weekly payouts to make the bank easier to follow (the benchmark's own text mentions weekly Stripe payouts†). Money: fewer, larger `Deposit - STRIPE` lines, and more money in transit at each month end.
+- **Annual renewals (one month each year).** Morgan pays the year's business insurance premium and renews a few annual SaaS plans in the same month. Money: several large one-time charges, each covering a year.
+- **Contoso renewal (November-December 2021).** Jordan negotiates the renewal. Counsel reviews the order form in November and invoices in December on Net-30, paid in January. Contoso's procurement wires the renewal two weeks late and short over a disputed seat count, then sends a corrective wire. Money: a legal invoice that crosses year end, and a late, short enterprise wire followed by a corrective one.
+- **Personal charge paid back.** Sam buys home-automation gear on Amazon with the company card, writes "Personal - will reimburse" in the memo, and two weeks later sends an ACH from a personal bank account to X0666. Money: a personal Ramp swipe and a matching `ACH Credit` in Mercury.
+- **Running down checking (2022)†.** As the company burns cash, Mercury Checking X0666 runs down (the real account is near `$103,634.63` by late 2022†), and Alex moves money back from Treasury ahead of payroll and rent; once the transfer lands a day after a payroll debit. Money: Treasury-to-checking transfers sized to upcoming bills, and a near-overdraft.
 
 ---
 
@@ -140,7 +169,7 @@ Each financial institution writes strictly to its own tables ([AccountingBench](
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "mercury.schema.json",
-  "description": "Written only by the Mercury Bank agent. One <table>.json file per entry in properties.",
+  "description": "Written only by Mercury, from events on its own accounts. One <table>.json file per entry in properties.",
   "type": "object",
   "properties": {
     "mercury_transactions": {
@@ -222,7 +251,7 @@ Each financial institution writes strictly to its own tables ([AccountingBench](
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "ramp.schema.json",
-  "description": "Written only by the Ramp card agent. One <table>.json file per entry in properties.",
+  "description": "Written only by Ramp, from events on its own accounts. One <table>.json file per entry in properties.",
   "type": "object",
   "properties": {
     "ramp_card_transactions": {
@@ -302,7 +331,7 @@ Each financial institution writes strictly to its own tables ([AccountingBench](
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "stripe.schema.json",
-  "description": "Written only by the Stripe processor agent. One <table>.json file per entry in properties.",
+  "description": "Written only by Stripe, from events on its own accounts. One <table>.json file per entry in properties.",
   "type": "object",
   "properties": {
     "stripe_invoices": {
@@ -424,7 +453,7 @@ Each financial institution writes strictly to its own tables ([AccountingBench](
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "rippling.schema.json",
-  "description": "Written only by the Rippling payroll agent. One <table>.json file per entry in properties.",
+  "description": "Written only by Rippling, from events on its own accounts. One <table>.json file per entry in properties.",
   "type": "object",
   "properties": {
     "rippling_journal_entries": {
@@ -438,7 +467,7 @@ Each financial institution writes strictly to its own tables ([AccountingBench](
           "type": {"const": "Payroll Journal Entry"},
           "num": {"type": "integer", "description": "Journal number, e.g. 18, 19"},
           "description": {"type": "string"},
-          "account": {"type": "string", "description": "Rippling's local export account label"},
+          "account": {"type": "string", "description": "The company's account name as set up in Rippling, e.g. 61100 - Salaries"},
           "debit": {"oneOf": [{"$ref": "common.schema.json#/$defs/money"}, {"type": "null"}]},
           "credit": {"oneOf": [{"$ref": "common.schema.json#/$defs/money"}, {"type": "null"}]}
         },
@@ -460,18 +489,32 @@ Because each entity acts on its own schedule through channels with real delays, 
 | :--- | :--- |
 | **1. In-transit month-end payouts** | Customers pay on March 29-31 -> Stripe batches a payout on March 30 (`payout_date = 2021-03-30`, `arrival_date = 2021-04-01`) -> the ACH is held until April 1 -> the Mercury March statement excludes it |
 | **2. Many-to-one payout batching** | Dozens of customer charges, processing fees and refunds in `stripe_*` are swept into a single net transfer that appears in `mercury_statement_line_items` simply as `Deposit - STRIPE` |
-| **3. Enterprise prepayments vs. service delivery** | Contoso signs an annual contract (`2021-02-01` to `2021-11-30`) and wires cash up front, one cash event in Mercury for 10-12 months of ongoing service |
+| **3. Enterprise prepayments vs. service delivery** | Contoso renews its annual contract in December 2021 (`2021-12-01` to `2022-11-30`) and wires cash up front, one cash event in Mercury for 12 months of ongoing service; other enterprise buyers sign and prepay during the period the same way |
 | **4. Executive and employee personal commingling** | A weekend trip produces swipes at `APPLE STORE` and `EQUINOX` on Ramp and a personal car lease wired from Mercury X0666, mixed in with normal weekday business travel |
 | **5. Ramp swipe-to-settlement cutoff lag** | A card swipe on March 30 (`swipe_date = 2021-03-30`) settles on April 1 (`transaction_date = 2021-04-01`), so it lands on the next month's Ramp statement |
 
-Further messiness the generator should allow: inconsistent vendor descriptors across months (from each merchant's descriptor variants), and, through noise prompts, duplicate or late-posted rows, blank or misleading memos, and customers who pay late, short-pay or send a corrective wire.
+Further messiness the generator should allow: inconsistent vendor descriptors across months (from each merchant's descriptor variants); late-posted rows from staff holding a payout or returning a wire; duplicates from a merchant charging twice and reversing it a few days later; blank or misleading memos, some added days after the swipe; and customers who pay late, short-pay or send a corrective wire.
+
+### 6.1 Coverage: kinds of events and stories
+
+Beyond the five phenomena, the world should show events of these kinds over its 18 months. Coverage only needs to be close: not every kind has to appear in every run, and amounts, dates and who is involved are up to the generator.
+
+- **Self-serve customers:** signups through the period, monthly renewals, renewals paid a day or more late after a failed attempt, amounts off plan prices (discounts, prorations), plan changes, churn, full and partial refunds, disputes, and Stripe pulling from Mercury when refunds exceed charges.
+- **Enterprise customers:** annual prepays by wire or ACH, slow approvals, a late payment, a short payment followed by a corrective wire, a mid-term expansion, a renewal.
+- **Vendors:** fixed SaaS plans billed to stored Ramp cards, monthly and annual; usage bills that follow what the team used; ads billed each time spend reaches a threshold; rent by ACH or wire; Net-30 legal invoices, some for work done the month before; equipment for hires (laptops, monitors); annual prepayments such as insurance; a vendor raising its price.
+- **People:** payroll on the 10th and 26th; a hire and its first payroll; business travel and client entertainment; personal charges on company cards, some admitted in memos and some left blank; personal payments from company accounts; a personal charge paid back; memos written days after the swipe.
+- **Merchants:** a returned item refunded to a card; a double charge reversed a few days later.
+- **Institutions:** payouts in transit at month end; a change in payout schedule; a Stripe pull and a payout on the same day; a payout held for review; a returned wire; Ramp statements and autopay; monthly interest and fees; large transfers into Treasury and smaller ones back to checking; account labels that differ between places (X3354 as checking or savings).
+- **Stories:** the chains in sections 4.1 and 4.2, and others like them for different people and months.
 
 ---
 
 ## 7. What the generator should produce from this prompt
 
 1. **World:** name, the time range in section 2, and currency.
-2. **Entities:** the cast in section 3, as shells with prompts. Use a cohort for the self-serve tail and individual entities for enterprise customers, key vendors, the five people and the four institutions.
-3. **Relationships:** the edges in section 4, with terms where they are fixed (Contoso's amount and dates, rent, plan prices, payroll dates) and prompts where they are loose (when a customer pays, how an executive behaves).
-4. **Stories:** a small number of time-ordered chains such as the New York trip, kept out by default per section 4.1 and available as examples to reviewers.
-5. **Noise:** descriptor variants (`descriptors`) for each vendor and catalog merchant; noise prompts for one-offs only when asked.
+2. **Institutions:** the four in section 3.4, each declared with its payment methods, mechanics and the tables in section 5, and each with a staff node.
+3. **Entities and nodes:** the cast in section 3, each with a prompt carrying its personality and its history. Self-serve subscribers are individual actors, created many at a time; enterprise customers, key vendors and the five people are individual too.
+4. **Catalog:** the merchants people buy from, each with descriptor variants (`descriptors`), acted for by the market.
+5. **Relationships:** the edges in section 4, with terms where they are fixed (Contoso's amount and dates, rent, plan prices, payroll dates) and prompts where they are loose (when a customer pays, how an executive behaves). Cards on file and authorized debits are pulls the payee collects.
+6. **Seed:** the history in section 2.1.
+7. **Stories and noise:** the stories in sections 4.1 and 4.2, and enough others to cover section 6.1, spread across people and months.
