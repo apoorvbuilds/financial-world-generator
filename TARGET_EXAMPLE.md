@@ -102,7 +102,7 @@ Money movements it causes:
   - `2021-03-14` `THE STANDARD HIGH LINE` `$1,800.00`, memo "4 nights NYC - 2 nights Contoso biz, 2 nights personal weekend"
 - Mercury X0666: `2021-03-16` `ACH Debit - PORSCHE FINANCIAL` `($1,150.00)`
 
-**Default behavior:** on the first generation, create the world plainly: customers, vendors, people, relationships and routine flows. Personal charges, late or short payments, disputes and trips like the one above are one-offs that reviewers add through the per-entity prompts afterward; the generator does not add them on its own unless the prompt asks.
+**Default behavior:** on the first generation, create the world plainly: customers, vendors, people, relationships and recurring flows paid as agreed. Personal charges, late or short payments, disputes and trips like the one above are one-offs that reviewers add through the per-entity prompts afterward; the generator does not add them on its own unless the prompt asks.
 
 ---
 
@@ -464,14 +464,14 @@ Because each entity acts on its own schedule through channels with real delays, 
 | **4. Executive and employee personal commingling** | A weekend trip produces swipes at `APPLE STORE` and `EQUINOX` on Ramp and a personal car lease wired from Mercury X0666, mixed in with normal weekday business travel |
 | **5. Ramp swipe-to-settlement cutoff lag** | A card swipe on March 30 (`swipe_date = 2021-03-30`) settles on April 1 (`transaction_date = 2021-04-01`), so it lands on the next month's Ramp statement |
 
-Further messiness the generator should allow through noise prompts: inconsistent vendor descriptors across months, duplicate or late-posted rows, blank or misleading memos, and customers who pay late, short-pay or send a corrective wire.
+Further messiness the generator should allow: inconsistent vendor descriptors across months (from each merchant's descriptor variants), and, through noise prompts, duplicate or late-posted rows, blank or misleading memos, and customers who pay late, short-pay or send a corrective wire.
 
 ---
 
 ## 7. What the generator should produce from this prompt
 
-1. **World:** name, the time range in section 2, currency, and a global `escalation_p` that is small.
+1. **World:** name, the time range in section 2, and currency.
 2. **Entities:** the cast in section 3, as shells with prompts. Use a cohort for the self-serve tail and individual entities for enterprise customers, key vendors, the five people and the four institutions.
 3. **Relationships:** the edges in section 4, with terms where they are fixed (Contoso's amount and dates, rent, plan prices, payroll dates) and prompts where they are loose (when a customer pays, how an executive behaves).
 4. **Stories:** a small number of time-ordered chains such as the New York trip, kept out by default per section 4.1 and available as examples to reviewers.
-5. **Noise:** a baseline of coded perturbations (descriptor variants, blank memos) at modest rates; prompt-based one-offs only when asked.
+5. **Noise:** descriptor variants (`descriptors`) for each vendor and catalog merchant; noise prompts for one-offs only when asked.
