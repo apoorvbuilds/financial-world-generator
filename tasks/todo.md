@@ -12,6 +12,7 @@ Plan: `tasks/plan.md` (decisions D1-D6, architecture, risks). Spec: `SPEC.md`.
   ```
 - Files under `validators/`, `institutions/mechanisms/`, `engine/clearinghouse.py` and `agents/loop.py` keep 100% line coverage from the task that creates them.
 - Every source file listed gets a mirrored test under `tests/`. Test files are not listed separately.
+- **Sizing.** SPEC's one-class-per-file convention makes model, tool and log-entry files a few lines each. A task's size counts the files that hold real logic, and no task has more than about five of those.
 - Tests use `FakeLlm` (scripted or replaying fixtures) or the `tests/support/as_agreed.py` policy. Live tests live in `tests/live/` and run only with `WORLDGEN_LIVE=1`.
 - A task that changes the manifest schema updates `docs/manifest-reference.md`. From Task 3 on, a test fails if any model field is undocumented.
 - Engine code never names an institution, industry, payment method or relationship type. From Task 2 on, the neutrality test enforces this.
@@ -58,7 +59,7 @@ Update TARGET_EXAMPLE.md only where an answer touches it. Write only the current
 
 ## Task 1: The institution declaration language, on paper
 
-**Description:** Before any mechanism code exists, write out how institutions are declared, and test the language against every institution the plan needs. This task writes no code.
+**Description:** Before any mechanism code exists, write out how institutions are declared, and test the language against the four SaaS institutions. This task writes no code. Task 1b then tests the language on another industry.
 
 **`docs/declaring-an-institution.md`** covers:
 - **Declaration fields:**
@@ -78,37 +79,50 @@ Update TARGET_EXAMPLE.md only where an answer touches it. Write only the current
   - the sign convention
   - which rows update later, and on what (settlement, a sweep, a statement closing, an annotation)
 - **Two coverage tables:**
-  - every column of every table below, with its source
-  - every money flow in TARGET_EXAMPLE section 4 and in the trucking prompt, with the act tool, staff tool or mechanism that produces it
+  - every column of every SaaS table, with its source
+  - every money flow in TARGET_EXAMPLE section 4, with the act tool, staff tool or mechanism that produces it
 
 **The SaaS declarations:**
 - `examples/saas_startup/manifest.yaml` holds only its `institutions:` section for now: Mercury, Ramp, Stripe and Rippling. Later tasks complete the manifest.
 - `examples/saas_startup/schemas/` holds one JSON Schema per table, split from TARGET_EXAMPLE section 5 with no column changed, plus `common.schema.json`.
 
-**The trucking declarations:**
-- `examples/trucking/PROMPT.md` is a one-page main prompt: a small trucking company, its shippers and drivers, a bank, a fuel-card issuer and a factoring company.
-- `examples/trucking/manifest.yaml` holds only its `institutions:` section.
-- `examples/trucking/schemas/` holds those institutions' table schemas.
-
 **Acceptance criteria:**
-- [ ] Every column of every table has a source from the vocabulary, and none is left as custom
-- [ ] Every institution behavior and money flow maps to a mechanism's config, an act tool or a staff decision. The behaviors and flows come from TARGET_EXAMPLE sections 3.4 and 4 and from the trucking prompt:
+- [ ] Every column of every SaaS table has a source from the vocabulary, and none is left as custom
+- [ ] Every institution behavior and money flow in TARGET_EXAMPLE sections 3.4 and 4 maps to a mechanism's config, an act tool or a staff decision:
   - Stripe's fee, availability delay, daily payouts and negative-balance pulls
   - Ramp's cutoff and autopay
   - Rippling's numbered, balanced journal entries and their Mercury debits
   - Mercury's statements and interest
-  - factoring advances and reserve releases
-  - fuel-card statements
 - [ ] Anything that does not fit is written up as a proposed change to the mechanism set or the act tools, for the user to decide (SPEC: ask first)
 
 **Verification:**
-- [ ] Manual: the user reads the doc and the declarations and approves the language
+- [ ] Manual: the user reviews the doc and the declarations at Checkpoint 0
 
 **Dependencies:** Task 0
-**Files likely touched:** `docs/declaring-an-institution.md`, `examples/saas_startup/{manifest.yaml,schemas/}`, `examples/trucking/{PROMPT.md,manifest.yaml,schemas/}`
+**Files likely touched:** `docs/declaring-an-institution.md`, `examples/saas_startup/{manifest.yaml,schemas/}`
 **Estimated scope:** M (design files only)
 
-## Checkpoint 0: Decisions and language (after Tasks 0-1)
+## Task 1b: The language tested on trucking
+
+**Description:** Test the language from Task 1 on an industry it wasn't written for. This task writes no code.
+- `examples/trucking/PROMPT.md` is a one-page main prompt: a small trucking company, its shippers and drivers, a bank, a fuel-card issuer and a factoring company.
+- `examples/trucking/manifest.yaml` holds only its `institutions:` section: the bank, the fuel-card issuer and the factoring company.
+- `examples/trucking/schemas/` holds those institutions' table schemas.
+- The doc's two coverage tables gain the trucking tables and money flows.
+
+**Acceptance criteria:**
+- [ ] Every column of every trucking table has a source from the vocabulary. Any addition the vocabulary needs is written up for the user, not quietly added.
+- [ ] Each trucking behavior maps to a mechanism's config, an act tool or a staff decision: factoring advances, factoring fees, reserve releases, and fuel-card statements and autopay
+- [ ] The coverage tables cover both industries
+
+**Verification:**
+- [ ] Manual: the user reviews the trucking declarations at Checkpoint 0
+
+**Dependencies:** Task 1
+**Files likely touched:** `examples/trucking/{PROMPT.md,manifest.yaml,schemas/}`, `docs/declaring-an-institution.md`
+**Estimated scope:** S (design files only)
+
+## Checkpoint 0: Decisions and language (after Tasks 0-1b)
 - [ ] The user has approved the SPEC diff and the declaration language
 - [ ] Any mechanism or act-tool change the user accepted is written into SPEC.md
 - [ ] SPEC's Manifest Shape excerpt for `institutions` matches the language
@@ -143,7 +157,7 @@ The test fails if any of these appears as a whole word in an identifier or strin
 - [ ] Gate passes
 - [ ] Manual: `uv run worldgen --help`
 
-**Dependencies:** Task 1
+**Dependencies:** Checkpoint 0
 **Files likely touched:** `pyproject.toml`, `worldgen/__init__.py`, `worldgen/cli.py`, `.gitignore`, `tests/test_engine_neutral.py`
 **Estimated scope:** S
 
@@ -184,27 +198,53 @@ Write `examples/tracer/manifest.yaml`, over 2021-03-22..2021-04-05:
 **Files likely touched:** `worldgen/manifest/{world,config,node,entity,account,access,manifest}.py`, `examples/tracer/manifest.yaml`, `docs/manifest-reference.md`
 **Estimated scope:** M (small model files)
 
-## Task 4: Manifest models: institutions
+## Task 4: Manifest models: tables and column sources
 
-**Description:** Model an institution declaration in the language approved at Checkpoint 0:
-- **The institution:** its id (its entity), `calendar`, `methods` (the settlement rules per payment method), `mechanisms` and `tables`.
-- **Mechanism configs:** one config model per generic mechanism, under `worldgen/manifest/mechanisms/`. Their behavior lands in the mechanism tasks. Defining every config now lets all six declarations from Task 1 load from the start.
-- **Tables:** each table declares its schema path, row source, filter and columns. Each column source is parsed into a typed source from the vocabulary.
+**Description:** Model a declared table in the language approved at Checkpoint 0:
+- its schema path
+- its row source: per movement, per statement, per record event or per split leg
+- its filter, on action, payment method and account
+- its columns
 
-The tracer declares Mercury with three payment methods (`ach`, `wire` and `book`), the settlement and descriptors mechanisms, and one table, `mercury_transactions`, whose schema is copied into `examples/tracer/schemas/`.
+Each column source is parsed into a typed source from the vocabulary: event fields, account fields, party fields, statement fields, counters, constants and value maps. Each typed source knows its value type, which Task 8 checks against the table's schema.
 
 **Acceptance criteria:**
-- [ ] The `institutions` sections of `examples/saas_startup` and `examples/trucking`, and the tracer's, load and round-trip
-- [ ] An unknown mechanism, an unknown calendar or a column source outside the vocabulary fails with a pointer
-- [ ] Every mechanism config model is documented in the manifest reference
+- [ ] Every table declaration in `examples/saas_startup` and `examples/trucking` loads as a table model and round-trips
+- [ ] A column source outside the vocabulary, or a filter on an unknown field, fails with a pointer
+- [ ] Every source kind is documented in the manifest reference
 
 **Verification:**
 - [ ] Tests pass: `uv run pytest -q tests/manifest tests/docs`
 - [ ] Gate passes
 
 **Dependencies:** Task 3
-**Files likely touched:** `worldgen/manifest/{institution,method_rules,table_decl,column_source}.py`, `worldgen/manifest/mechanisms/*.py`, `examples/tracer/{manifest.yaml,schemas/}`
+**Files likely touched:** `worldgen/manifest/{table_decl,row_source,column_source}.py`
+**Estimated scope:** S
+
+## Task 4b: Manifest models: institutions
+
+**Description:** Model an institution declaration:
+- **The institution:** its id (its entity), `calendar`, `methods` (the settlement rules per payment method), `mechanisms`, and `tables` made of Task 4's table models.
+- **Mechanism configs:** one config model per generic mechanism, under `worldgen/manifest/mechanisms/`. Their behavior lands in the mechanism tasks. Defining every config now lets every declaration from Tasks 1 and 1b load from the start.
+
+The tracer declares Mercury with three payment methods (`ach`, `wire` and `book`), the settlement and descriptors mechanisms, and one table, `mercury_transactions`, whose schema is copied into `examples/tracer/schemas/`.
+
+**Acceptance criteria:**
+- [ ] The `institutions` sections of `examples/saas_startup` and `examples/trucking`, and the tracer's, load and round-trip
+- [ ] An unknown mechanism or an unknown calendar fails with a pointer
+- [ ] Every mechanism config model is documented in the manifest reference
+
+**Verification:**
+- [ ] Tests pass: `uv run pytest -q tests/manifest tests/docs`
+- [ ] Gate passes
+
+**Dependencies:** Task 4
+**Files likely touched:** `worldgen/manifest/{institution,method_rules}.py`, `worldgen/manifest/mechanisms/*.py`, `examples/tracer/{manifest.yaml,schemas/}`
 **Estimated scope:** M (small model files)
+
+## Checkpoint 1a: The declarations load (after Tasks 2-4b)
+- [ ] Gate passes
+- [ ] Every declaration from Tasks 1 and 1b loads as a model, and the neutrality test reads its names
 
 ## Task 5: Manifest models: relationships, terms, catalog, stories, noise
 
@@ -259,7 +299,7 @@ The tracer gains a seed:
 - [ ] Tests pass: `uv run pytest -q tests/manifest tests/docs`
 - [ ] Gate passes
 
-**Dependencies:** Tasks 4, 5
+**Dependencies:** Tasks 4b, 5
 **Files likely touched:** `worldgen/manifest/{seed,mandate}.py`, `examples/tracer/manifest.yaml`
 **Estimated scope:** S
 
@@ -313,7 +353,7 @@ The tracer gains a seed:
 **Acceptance criteria:**
 - [ ] A method no institution declares, or an access grant wider than its account, fails with a pointer
 - [ ] A column whose source type doesn't fit its schema column (a date source for a money column), or a required column with no source, fails with a pointer
-- [ ] The tracer and all six declarations from Task 1 pass
+- [ ] The tracer and every declaration from Tasks 1 and 1b pass
 
 **Verification:**
 - [ ] Tests pass: `uv run pytest -q tests/validators`
@@ -323,10 +363,10 @@ The tracer gains a seed:
 **Files likely touched:** `worldgen/validators/{methods,table_columns}.py`, `tests/fixtures/manifests/`
 **Estimated scope:** S
 
-## Checkpoint 1a: The manifest (after Tasks 2-8)
+## Checkpoint 1b: The manifest validates (after Tasks 5-8)
 - [ ] Gate passes
 - [ ] `validate` passes the tracer and fails every error fixture with a pointer
-- [ ] The six declarations from Task 1 load and pass `table_columns`
+- [ ] Every declaration from Tasks 1 and 1b passes `table_columns`
 
 ## Task 9: Clock, calendars, Rng and money
 
@@ -427,6 +467,10 @@ A run context sets `done` on success and `failed` on any exception. This task ad
 **Files likely touched:** `worldgen/llm/{base,fake}.py`
 **Estimated scope:** S
 
+## Checkpoint 1c: Engine types (after Tasks 9-12)
+- [ ] Gate passes
+- [ ] The core types read cleanly together before the loop builds on them: `Event`, the account registry, `LlmRequest` and `LlmResponse`, and the log entry shape
+
 ## Task 13: Tool base class and `AgentLoop`
 
 **Description:**
@@ -504,13 +548,14 @@ The date-list and recurrence expanders are one file each. Obligations are clippe
 - [ ] Tests pass: `uv run pytest -q tests/engine/test_clearinghouse.py tests/institutions/mechanisms`
 - [ ] Gate passes
 
-**Dependencies:** Tasks 4, 10
+**Dependencies:** Tasks 4b, 10
 **Files likely touched:** `worldgen/engine/clearinghouse.py`, `worldgen/institutions/mechanisms/settlement.py`
 **Estimated scope:** S
 
-## Checkpoint 1b: The engine core (after Tasks 9-15)
+## Checkpoint 1d: A scripted turn, a schedule and settlement (after Tasks 13-15)
 - [ ] Gate passes
-- [ ] The hypothesis suites for the clock, the ledger and settlement are green
+- [ ] A scripted `FakeLlm` turn runs through `AgentLoop` with parallel tool calls, and every call is logged
+- [ ] The tracer compiles into its obligations, and the settlement suite is green
 
 ## Task 16: Act tools, part 1: validation, reservation and `pay`
 
@@ -539,11 +584,31 @@ A call that passes reserves its funds and is enqueued in the clearinghouse withi
 **Files likely touched:** `worldgen/tools/act/{act_tool,act_menu,pay}.py`, `worldgen/engine/reservations.py`, `worldgen/runs/entries/action_rejected.py`
 **Estimated scope:** M
 
-## Task 17: Node tree, `NodeView`, actor briefs and read tools
+## Task 17: Node tree, `NodeView` and read tools
 
 **Description:**
 - **`tree/nodes.py`** is the live tree: parent, children, role, the entity each node stands for, and subtree queries.
 - **`NodeView`** is the only path from a brief or a read tool to world state. It covers the node's entity's accounts, the accounts it has access to, its obligations and its own history.
+- **Two read tools:**
+  - `my_balances` shows posted and available balances.
+  - `my_obligations` shows due, overdue, and upcoming items within `obligation_horizon_days` (D3).
+
+**Acceptance criteria:**
+- [ ] `n_morgan`'s `my_obligations` on 2021-04-01 lists the rent obligation, and `n_landlord`'s doesn't
+- [ ] `n_morgan`'s `my_balances` shows Acme's 03-25 payment, made with `pay` and settled by the clearinghouse, only after it settles
+- [ ] A read tool cannot reach an account the node has no access to (test through `NodeView`)
+
+**Verification:**
+- [ ] Tests pass: `uv run pytest -q tests/tree tests/agents tests/tools/read`
+- [ ] Gate passes
+
+**Dependencies:** Tasks 14, 16
+**Files likely touched:** `worldgen/tree/nodes.py`, `worldgen/agents/node_view.py`, `worldgen/tools/read/{my_balances,my_obligations}.py`
+**Estimated scope:** M
+
+## Task 17b: Actor briefs and the actor role
+
+**Description:**
 - **`briefs.py`** builds an actor's brief from ordered sections:
   1. the prompt, with its revision id
   2. the chapter brief
@@ -551,22 +616,20 @@ A call that passes reserves its funds and is enqueued in the clearinghouse withi
   4. today's items: obligations due today and overdue, story steps, and balance changes since the last turn
 
   `turn_started` logs the brief along with its revision ids.
-- **The actor role** (system template plus tools) gets two read tools:
-  - `my_balances` shows posted and available balances.
-  - `my_obligations` shows due, overdue, and upcoming items within `obligation_horizon_days` (D3).
+- **The actor role** is a system template plus a tool set: the act tools from Task 16 and the read tools from Task 17. Later tasks add tools to it.
 
 **Acceptance criteria:**
-- [ ] `n_morgan`'s brief on 2021-04-01 lists the rent obligation, and `n_landlord`'s brief that day doesn't
-- [ ] `n_morgan`'s `my_balances` shows Acme's 03-25 payment only after it settles
-- [ ] A read tool cannot reach an account the node has no access to (test through `NodeView`)
+- [ ] `n_morgan`'s brief on 2021-04-01 lists the rent obligation among today's items, and `n_landlord`'s brief that day doesn't
+- [ ] The sections come in order, and `turn_started` records the brief with its prompt revision id
+- [ ] Two actors' turns send byte-identical system prompts and tools, and differ only in their briefs
 
 **Verification:**
-- [ ] Tests pass: `uv run pytest -q tests/tree tests/agents tests/tools/read`
+- [ ] Tests pass: `uv run pytest -q tests/tree/test_briefs.py tests/agents`
 - [ ] Gate passes
 
-**Dependencies:** Tasks 13, 14
-**Files likely touched:** `worldgen/tree/{nodes,briefs}.py`, `worldgen/agents/{node_view,roles/actor}.py`, `worldgen/agents/templates/actor.md`, `worldgen/tools/read/{my_balances,my_obligations}.py`
-**Estimated scope:** M (small tool files)
+**Dependencies:** Task 17
+**Files likely touched:** `worldgen/tree/briefs.py`, `worldgen/agents/roles/actor.py`, `worldgen/agents/templates/actor.md`
+**Estimated scope:** S
 
 ## Task 18: Answering obligations
 
@@ -588,9 +651,13 @@ Also add `tests/support/as_agreed.py`, the scripted policy described in the plan
 - [ ] Tests pass: `uv run pytest -q tests/engine/test_obligations.py tests/tools/act`
 - [ ] Gate passes
 
-**Dependencies:** Tasks 16, 17
+**Dependencies:** Tasks 16, 17b
 **Files likely touched:** `worldgen/engine/obligations.py`, `worldgen/tools/act/answer_obligation.py`, `worldgen/runs/entries/obligation_unanswered.py`, `tests/support/as_agreed.py`
 **Estimated scope:** M
+
+## Checkpoint 1e: An obligation answered (after Tasks 16-18)
+- [ ] Gate passes
+- [ ] In a test without the day loop, `n_morgan`'s scripted turn on 2021-04-01 reads its brief, answers the rent obligation with `pay`, and the payment settles through the clearinghouse
 
 ## Task 19: Day loop
 
@@ -674,6 +741,10 @@ The engine logs `seed_loaded` with the counts of seed events, open obligations a
 **Files likely touched:** `worldgen/engine/seed.py`, `worldgen/validators/seed.py`, `worldgen/runs/entries/seed_loaded.py`
 **Estimated scope:** M
 
+## Checkpoint 1f: The tracer runs from its seed (after Tasks 19-21)
+- [ ] Gate passes
+- [ ] In a test, the tracer runs day by day with `as_agreed` from its seed and writes `mercury_transactions`, with one row per settled movement, the seeded ACH included
+
 ## Task 22: `worldgen simulate`
 
 **Description:** `Simulation` connects the manifest, seed, compiler, engine, institutions and sinks inside a `RunStore` run context. `worldgen simulate <manifest> --llm fake:<fixture_dir>` creates `worlds/<world>/runs/<run_id>/` (or a directory set by `--world-dir`) and prints the run directory. The Anthropic backend becomes the default in Task 24.
@@ -717,7 +788,7 @@ The engine logs `seed_loaded` with the counts of seed events, open obligations a
 **Files likely touched:** `worldgen/validators/{conservation,event_links,log_consistency,schema,obligations_answered}.py`, `worldgen/cli.py`
 **Estimated scope:** M
 
-## Checkpoint 1: Tracer bullet (after Tasks 16-23)
+## Checkpoint 1: Tracer bullet (after Tasks 22-23)
 - [ ] Gate passes
 - [ ] `simulate` then `verify` on the tracer world is clean offline, starting from its seed
 - [ ] The user has read one run directory and agrees with the log, event, row and brief shapes
@@ -858,6 +929,10 @@ In that review the parent handles the escalation or escalates to its own parent.
 **Files likely touched:** `worldgen/tools/tree/escalate.py`, `worldgen/tree/reviews.py`, `worldgen/tools/read/children_reports.py`, `worldgen/agents/roles/{actor,narrator}.py`, `worldgen/runs/entries/escalated.py`
 **Estimated scope:** M
 
+## Checkpoint 3a: Reviews offline (after Tasks 26-28)
+- [ ] Gate passes
+- [ ] Offline with `as_agreed`, the tracer's reviews run in order: report turns, reports up, briefs down, a scheduled and a default date, and an escalation that moves a review
+
 ## Task 29: Growing the tree
 
 **Description:** Narrator tools, each taking a list of items and validated on the spot. A call is applied all or nothing, and a rejection names every failing item (D5p).
@@ -937,7 +1012,7 @@ The isolation test plants a unique canary in every node's prompt, notes and brie
 **Files likely touched:** `worldgen/validators/{tree_rules,isolation}.py`, `tests/support/canaries.py`
 **Estimated scope:** M
 
-## Checkpoint 3: Narrator tree (after Tasks 26-31)
+## Checkpoint 3: Narrator tree (after Tasks 29-31)
 - [ ] Gate passes
 - [ ] A live tracer run over its full range is reviewed with the user. It covers the review dates narrators chose and why, any escalations, the reports and briefs, and any spawns or relationships written.
 - [ ] Decide on changes to the narrator template before actor life and institutions build on it
@@ -1010,6 +1085,10 @@ Messages reach the recipient's inbox the next day and appear among its items. `s
 **Files likely touched:** `worldgen/tools/act/{bill,record_activity,annotate}.py`, `worldgen/engine/obligations.py`
 **Estimated scope:** M
 
+## Checkpoint 4a: Talking and billing (after Tasks 32-34)
+- [ ] Gate passes
+- [ ] Offline, a Net-30 vendor bills the tracer company. The bill arrives as a message and as an obligation, and `n_morgan` pays it. A landlord on a pull lease collects rent under a seeded mandate.
+
 ## Task 35: Timers, notes, history and statements
 
 **Description:**
@@ -1056,7 +1135,7 @@ Every `turn_started` entry lists the revision ids of the noise in its brief (SC6
 - [ ] Tests pass: `uv run pytest -q tests/tree/test_briefs.py`
 - [ ] Gate passes
 
-**Dependencies:** Task 17
+**Dependencies:** Task 17b
 **Files likely touched:** `worldgen/tree/{briefs,noise_scope}.py`
 **Estimated scope:** S
 
@@ -1088,6 +1167,11 @@ The isolation validator adds the market's exception: it may see payments made to
 **Dependencies:** Tasks 30, 32, 33
 **Files likely touched:** `worldgen/tools/read/{catalog,catalog_payments}.py`, `worldgen/agents/{roles/market.py,templates/market.md}`, `worldgen/tools/act/pay.py`, `worldgen/validators/isolation.py`
 **Estimated scope:** M
+
+## Checkpoint 4b: Memory, noise and the market (after Tasks 35-37)
+- [ ] Gate passes
+- [ ] Offline, a catalog merchant collects under a card on file through the market, scoped noise reaches exactly the briefs in its scope, and a timer fires on its day
+- [ ] Isolation passes with canaries, the market included
 
 ## Task 38: Staff nodes: `flag`, `hold` and `release`
 
@@ -1136,7 +1220,7 @@ Staff tools are validated like any act tool.
 **Files likely touched:** `worldgen/tools/act/dispute.py`, `worldgen/tools/staff/{reverse,adjust}.py`
 **Estimated scope:** S
 
-## Checkpoint 4 (after Tasks 32-39)
+## Checkpoint 4: Staff (after Tasks 38-39)
 - [ ] Gate passes
 - [ ] The tracer, extended with a Net-30 vendor that bills, a catalog merchant with a card on file, and a large wire held by staff, runs offline and verifies clean, including tree rules and isolation
 
@@ -1144,7 +1228,7 @@ Staff tools are validated like any act tool.
 
 ## Phase 5: Mechanisms and institutions
 
-Each mechanism task implements one file in `worldgen/institutions/mechanisms/`, configured by the model from Task 4. Each runs in the day-close order fixed in Task 20 and is shown on a fixture world, built in the test, that uses one or more of the SaaS declarations from Task 1. Each must keep the neutrality test passing.
+Each mechanism task implements one file in `worldgen/institutions/mechanisms/`, configured by the model from Task 4b. Each runs in the day-close order fixed in Task 20 and is shown on a fixture world, built in the test, that uses one or more of the SaaS declarations from Task 1. Each must keep the neutrality test passing. The payouts lane (Tasks 40-42) and the statements lane (Tasks 43-45) can run in parallel, and Checkpoints 5a and 5b close them.
 
 ## Task 40: The split mechanism
 
@@ -1152,12 +1236,12 @@ Each mechanism task implements one file in `worldgen/institutions/mechanisms/`, 
 - **Deducting legs** take a fixed amount plus a percentage to the institution's own account (fees), or to a named party (withholding).
 - **Add-on legs** are charged on top to the payer (employer contributions).
 
-Each leg links its movement, so tables can render one row per leg. The fixture world shows two declarations: Stripe's 2.9% + $0.30 fee on collections into the Stripe balance, and Rippling's withholding and employer tax on a payroll payment.
+Each leg links its movement, so tables can render one row per leg. The fixture world shows two splits: Stripe's 2.9% + $0.30 fee on collections into the Stripe balance, and a payroll split with withholding and an employer add-on. Rippling's journal entries also need numbering, so they come together in Task 46.
 
 **Acceptance criteria:**
 - [ ] hypothesis over amounts: deducting legs plus the net equal the movement exactly, each fee equals its formula, and money is conserved
 - [ ] `stripe_charges` renders `amount`, `fee_amount` and `net_amount` from the split, and every row validates
-- [ ] `rippling_journal_entries` renders one balanced row per leg from a payroll payment
+- [ ] A payroll split renders one row per leg in a fixture table, and its debit and credit legs balance
 
 **Verification:**
 - [ ] Tests pass: `uv run pytest -q tests/institutions/mechanisms/test_split.py tests/institutions`
@@ -1210,12 +1294,15 @@ One sweep movement links every movement it carries (charges, fees, refunds), so 
 **Files likely touched:** `worldgen/institutions/mechanisms/sweep.py`, `worldgen/institutions/tables.py`
 **Estimated scope:** M
 
+## Checkpoint 5a: Payouts lane (after Tasks 40-42)
+- [ ] Gate passes
+- [ ] Phenomena 1 and 2 hold on a fixture world, and conservation holds across fees, holds, payouts and pulls
+
 ## Task 43: The statement mechanism
 
-**Description:** Closes statements on a cycle (for example monthly), counting movements by settled or posted date. Each statement has its totals and a running balance per line, and renders statement rows and line rows. It backfills `statement_id` on the movements it covers, signals the close for sweeps, and continues from a seeded unpaid statement. The fixture world shows three tables:
+**Description:** Closes statements on a cycle (for example monthly), counting movements by settled or posted date. Each statement has its totals and a running balance per line, and renders statement rows and line rows. It backfills `statement_id` on the movements it covers, signals the close for sweeps, and continues from a seeded unpaid statement. The fixture world shows two tables:
 - Ramp's `ramp_statements`
 - Mercury's `mercury_statement_line_items`
-- Mercury's `mercury_treasury_records`
 
 The tracer gains a Mercury statement.
 
@@ -1234,7 +1321,7 @@ The tracer gains a Mercury statement.
 
 ## Task 44: The interest mechanism
 
-**Description:** Credits interest on an account's balance at its annual `rate`, on the basis its declaration sets (the average daily balance or the closing balance), at the end of each cycle. The interest is paid as a movement from the institution's account. The fixture world shows Mercury checking and Treasury. The tracer gains interest on X0666.
+**Description:** Credits interest on an account's balance at its annual `rate`, on the basis its declaration sets (the average daily balance or the closing balance), at the end of each cycle. The interest is paid as a movement from the institution's account. The fixture world shows Mercury checking and Treasury. With interest in place, it also renders `mercury_treasury_records`, whose rows are statements with an interest column. The tracer gains interest on X0666.
 
 **Acceptance criteria:**
 - [ ] hypothesis: the interest equals the configured formula to the cent
@@ -1270,6 +1357,10 @@ Counters continue from their seeded values. A number is assigned when its row fi
 **Files likely touched:** `worldgen/institutions/mechanisms/numbering.py`
 **Estimated scope:** S
 
+## Checkpoint 5b: Statements lane (after Tasks 43-45)
+- [ ] Gate passes
+- [ ] Over two month ends on a fixture world, statements, statement lines and Treasury records reconcile to the ledger, and counters continue from the seed
+
 ## Task 46: The four SaaS institutions in full
 
 **Description:** A fixture world, built in the test, from the `institutions` section of `examples/saas_startup` plus a small cast:
@@ -1279,7 +1370,7 @@ Counters continue from their seeded values. A number is assigned when its row fi
 - two employees paid through Rippling
 - a landlord
 
-It runs offline with `as_agreed` from 2021-03-22 to 2021-04-05, across a month end, with a seed that includes a Ramp unpaid statement and Rippling and Stripe counters.
+It runs offline with `as_agreed` from 2021-03-22 to 2021-04-05, across a month end, with a seed that includes Rippling's and Stripe's counters.
 
 **Acceptance criteria:**
 - [ ] All ten TARGET_EXAMPLE tables are produced, every row validates against TARGET's schemas, and `verify` is clean
@@ -1318,9 +1409,9 @@ It runs on the same engine with no change under `worldgen/`. Anything that turns
 **Files likely touched:** `examples/trucking/manifest.yaml`, `tests/examples/test_trucking.py`
 **Estimated scope:** M
 
-## Checkpoint 5: Institutions (after Tasks 40-47)
+## Checkpoint 5: Institutions (after Tasks 46-47)
 - [ ] Gate passes
-- [ ] All six institutions render from declarations alone, and the neutrality test passes
+- [ ] Every institution in both examples renders from declarations alone, and the neutrality test passes
 - [ ] Review the state of the system with the user before the milestone
 
 ---
@@ -1482,7 +1573,7 @@ Users edit prompts directly in the manifest (D5i). When `simulate` finds manifes
 - [ ] Tests pass: `uv run pytest -q tests/engine/test_revisions.py tests/test_cli.py`
 - [ ] Gate passes
 
-**Dependencies:** Tasks 11, 17
+**Dependencies:** Tasks 11, 17b
 **Files likely touched:** `worldgen/engine/revisions.py`, `worldgen/runs/prompts_snapshot.py`, `worldgen/cli.py`
 **Estimated scope:** S
 
@@ -1505,6 +1596,10 @@ Users edit prompts directly in the manifest (D5i). When `simulate` finds manifes
 **Dependencies:** Task 53
 **Files likely touched:** `worldgen/tools/self/add_quirk.py`, `worldgen/engine/revisions.py`, `worldgen/runs/entries/quirk_added.py`
 **Estimated scope:** S
+
+## Checkpoint 8a: Revisions (after Tasks 53-54)
+- [ ] Gate passes
+- [ ] A user edit and a quirk both appear as revisions in the next run's `prompts.json`, and the earlier run's directory is unchanged
 
 ## Task 55: `runs tail` with filters, and cancel
 
@@ -1560,8 +1655,9 @@ Users edit prompts directly in the manifest (D5i). When `simulate` finds manifes
 **Files likely touched:** `worldgen/runs/noise_trace.py`, `worldgen/cli.py`
 **Estimated scope:** S
 
-## Checkpoint 8 (after Tasks 53-57)
-- [ ] Gate passes; a rerun after a quirk shows the revision in its `prompts.json` and in `runs show`
+## Checkpoint 8: Run history (after Tasks 55-57)
+- [ ] Gate passes
+- [ ] A live tracer run is followed with `runs tail`, cancelled, rerun with `--from-run`, and one noise prompt traced with `runs show --noise`
 
 ---
 

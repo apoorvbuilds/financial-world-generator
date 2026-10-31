@@ -91,31 +91,38 @@ These are missing from SPEC.md or were chosen without confirmation. Each has a p
 **Phase 0: Decisions and the declaration language**
 - Task 0: Confirm D1-D6 and sync SPEC.md
 - Task 1: The institution declaration language, on paper
+- Task 1b: The language tested on trucking
 - **Checkpoint 0:** the user approves the decisions and the language
 
 **Phase 1: Foundation and tracer bullet (fake LLM)**
 - Task 2: Project scaffold, CLI and the neutrality test
 - Task 3: Manifest models: world, config, nodes, entities, accounts, access
-- Task 4: Manifest models: institutions
+- Task 4: Manifest models: tables and column sources
+- Task 4b: Manifest models: institutions
+- **Checkpoint 1a:** the declarations load
 - Task 5: Manifest models: relationships, terms, catalog, stories, noise
 - Task 6: Manifest models: seed and mandates
 - Task 7: `worldgen validate`: references, tree, time range
 - Task 8: `worldgen validate`: payment methods and table columns
-- **Checkpoint 1a:** the manifest
+- **Checkpoint 1b:** the manifest validates
 - Task 9: Clock, calendars, Rng and money
 - Task 10: Accounts, events and ledger
 - Task 11: Run directory, `run.json` and `log.jsonl`
 - Task 12: Llm interface and `FakeLlm`
+- **Checkpoint 1c:** the engine types
 - Task 13: Tool base class and `AgentLoop`
 - Task 14: Compiler: obligations and story steps
 - Task 15: Clearinghouse and the settlement mechanism
-- **Checkpoint 1b:** the engine core
+- **Checkpoint 1d:** a scripted turn, a schedule and settlement
 - Task 16: Act tools, part 1: validation, reservation and `pay`
-- Task 17: Node tree, `NodeView`, actor briefs and read tools
+- Task 17: Node tree, `NodeView` and read tools
+- Task 17b: Actor briefs and the actor role
 - Task 18: Answering obligations
+- **Checkpoint 1e:** an obligation answered and settled
 - Task 19: Day loop
 - Task 20: Institutions and tables: movement rows
 - Task 21: Loading the seed
+- **Checkpoint 1f:** the tracer runs day by day from its seed
 - Task 22: `worldgen simulate`
 - Task 23: `worldgen verify`
 - **Checkpoint 1:** the tracer world simulates and verifies offline
@@ -129,6 +136,7 @@ These are missing from SPEC.md or were chosen without confirmation. Each has a p
 - Task 26: Reviews, part 1: review dates and reports up
 - Task 27: Reviews, part 2: briefs down and `schedule_review`
 - Task 28: Escalation
+- **Checkpoint 3a:** reviews run offline
 - Task 29: Growing the tree
 - Task 30: Relationships, stories and catalog entries written during a run
 - Task 31: Tree-rule and isolation validators
@@ -138,23 +146,27 @@ These are missing from SPEC.md or were chosen without confirmation. Each has a p
 - Task 32: Messages and inbox
 - Task 33: Mandates and `collect`
 - Task 34: Record tools: `bill`, `record_activity` and `annotate`
+- **Checkpoint 4a:** talking and billing
 - Task 35: Timers, notes, history and statements
 - Task 36: Noise in briefs
 - Task 37: The catalog and the market node
+- **Checkpoint 4b:** memory, noise and the market
 - Task 38: Staff nodes: `flag`, `hold` and `release`
 - Task 39: Disputes, `reverse` and `adjust`
-- **Checkpoint 4**
+- **Checkpoint 4:** staff
 
-**Phase 5: Mechanisms and institutions (three lanes)**
+**Phase 5: Mechanisms and institutions (two parallel lanes)**
 - Task 40: The split mechanism
 - Task 41: The hold mechanism
 - Task 42: The sweep mechanism
+- **Checkpoint 5a:** the payouts lane
 - Task 43: The statement mechanism
 - Task 44: The interest mechanism
 - Task 45: The numbering mechanism
+- **Checkpoint 5b:** the statements lane
 - Task 46: The four SaaS institutions in full
 - Task 47: `examples/trucking` with no code change
-- **Checkpoint 5:** all six institutions render from declarations
+- **Checkpoint 5:** every institution in both examples renders from declarations
 
 **Phase 6: First milestone (15 days)**
 - Task 48: `examples/saas_startup` manifest and offline baseline
@@ -170,10 +182,11 @@ These are missing from SPEC.md or were chosen without confirmation. Each has a p
 **Phase 8: Revisions, quirks, run history**
 - Task 53: Prompt history and revision links
 - Task 54: `add_quirk`
+- **Checkpoint 8a:** revisions
 - Task 55: `runs tail` with filters, and cancel
 - Task 56: Rerun from a run
 - Task 57: Noise traceability
-- **Checkpoint 8**
+- **Checkpoint 8:** run history
 
 **Phase 9: Completion**
 - Task 58: Docs pass: declaring an institution
@@ -184,37 +197,36 @@ These are missing from SPEC.md or were chosen without confirmation. Each has a p
 
 | SC | Tasks |
 |---|---|
-| 1 validate errors | 4, 7, 8, 21 |
+| 1 validate errors | 4, 4b, 7, 8, 21 |
 | 2 phenomena | 42, 43 (row level); 46 (1, 2, 5 on a fixture world); 49 (2, 5 in the window); 59 (all five) |
 | 3-5 variation, conservation, event links | 10, 15, 21, 23, 46, 49, 59 |
 | 6 noise traceable | 36, 57 |
 | 7 author; edit and rerun | 50-52, 53 |
-| 8 new institution or industry by manifest only | 1, 2, 47, 58 |
+| 8 new institution or industry by manifest only | 1, 1b, 2, 47, 58 |
 | 9 rows as produced, retries, tool-call cap, cancel | 20, 13, 24, 55 |
 | 10 act tools validated | 16, 33 |
 | 11 run history | 11, 22, 23, 55, 56 |
 | 12 obligations answered | 18, 23 |
-| 13 isolation | 17, 31, 32, 37, 49 |
+| 13 isolation | 17, 17b, 31, 32, 37, 49 |
 | 14 tree rules | 26-31 |
 
 ## Parallelization
 
 - **Must be sequential:** the core, Tasks 2-23. Within it, Tasks 9 and 12 depend only on the scaffold and Task 11 only on Task 3, so they can run alongside the rest of the manifest models (Tasks 4-8).
 - **After Checkpoint 2:** the narrator lane (26-31) and the actor-life lane (32-36) both add sections to `tree/briefs.py`. They can run in parallel if the brief is composed from ordered section functions and each lane adds its own.
-- **After Checkpoint 4, three mechanism lanes:**
-  - payouts: split, hold, sweep (40-42)
-  - statements: statement, interest (43-44)
-  - numbering (45)
+- **After Checkpoint 4, two mechanism lanes:**
+  - payouts: split, hold, sweep (40-42), closed by Checkpoint 5a
+  - statements: statement, interest, numbering (43-45), closed by Checkpoint 5b. Numbering depends on nothing else in the lane, so it can start at once.
 
-  Each mechanism is its own file with its own config model, and Task 20 fixes the day-close order up front, so the lanes don't conflict. Tasks 46 and 47 join them and can run in parallel with each other.
+  Each mechanism is its own file with its own config model, and Task 20 fixes the day-close order up front, so the lanes don't conflict. Tasks 46 and 47 join the lanes and can run in parallel with each other.
 - **Authoring (50-52)** needs the tree tools (26-30), the catalog (37) and `validate`, so it can run alongside Phases 5-6.
-- **Run history (53-57)** needs only Tasks 11, 17, 22, 25 and 36, so it can run alongside Phases 5-7.
+- **Run history (53-57)** needs only Tasks 11, 17b, 22, 25 and 36, so it can run alongside Phases 5-7.
 
 ## Risks and Mitigations
 
 | Risk | Impact | Mitigation |
 |---|---|---|
-| The generic declaration language can't express a real institution's tables or behavior (Rippling's balanced journal lines, Stripe's per-customer invoice numbers, factoring advances and reserves) | High | Task 1 maps every column and behavior on paper first. Gaps go to the user as mechanism changes before Phase 5 builds on them. Task 47 runs trucking with no code change. |
+| The generic declaration language can't express a real institution's tables or behavior (Rippling's balanced journal lines, Stripe's per-customer invoice numbers, factoring advances and reserves) | High | Tasks 1 and 1b map every column and behavior on paper first, for two industries. Gaps go to the user as mechanism changes before Phase 5 builds on them. Task 47 runs trucking with no code change. |
 | Institution- or industry-specific code creeps into the engine | Medium | From Task 2, the neutrality test fails on any example's institution, payment method or relationship name in `worldgen/` |
 | A seed that doesn't add up: opening balances, in-transit money and institution state disagree | Medium | The seed validator (Task 21). Conservation is counted from `start`, with in-transit money opening in clearing accounts. |
 | Actors misuse tools, invent implausible activity, or all behave alike | High | Strict tool schemas; rejection reasons returned within the turn; catalog price ranges; a live tracer before any scale-out; `runs show` metrics; the milestone review |
@@ -231,4 +243,4 @@ These are missing from SPEC.md or were chosen without confirmation. Each has a p
 ## Open Questions
 
 - D1-D6 above. D4 and D5 are needed before Task 1 (D5c shapes the column vocabulary). D6 is needed before Task 11, and D1 and D2 by Phase 6.
-- Any change to the mechanism set or the act tools that Task 1 proposes. These are decided at Checkpoint 0.
+- Any change to the mechanism set, the act tools or the column vocabulary that Tasks 1 and 1b propose. These are decided at Checkpoint 0.
